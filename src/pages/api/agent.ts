@@ -3,6 +3,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from "next";
+import { requestEvaluation } from "@/lib/server/screening";
 import { EventType, type AGUIEvent } from "@/types/agui-events";
 
 // Tool definitions
@@ -38,7 +39,7 @@ const TOOLS = [
     function: {
       name: "screen_proposal",
       description:
-        "Screen a proposal against NEAR governance criteria. Returns evaluation with pass/fail for each criterion.",
+        "Screen a proposal against NEAR governance criteria. Returns evaluation with pass/fail for quality criteria and attention scores.",
       parameters: {
         type: "object",
         properties: {
@@ -64,6 +65,14 @@ function getSystemPrompt(currentState: any) {
 **Current Proposal State:**
 Title: ${currentState.title || "(empty)"}
 Content: ${currentState.content || "(empty)"}
+${
+  currentState.evaluation
+    ? `Quality Score: ${(currentState.evaluation.qualityScore * 100).toFixed(
+        0
+      )}%
+Attention Score: ${(currentState.evaluation.attentionScore * 100).toFixed(0)}%`
+    : ""
+}
 
 **CRITICAL INSTRUCTIONS:**
 - When the user asks you to write, generate, create, or add ANY content to the proposal, you MUST use the write_proposal tool
@@ -73,12 +82,21 @@ Content: ${currentState.content || "(empty)"}
 - If content is empty, generate full proposal content
 
 **NEAR Proposal Criteria:**
+
+**Quality Criteria (must all pass):**
 1. **Complete**: Objectives, budget breakdown, timeline, measurable KPIs
 2. **Legible**: Clear, well-structured, error-free, professionally formatted
 3. **Consistent**: No contradictions in budget, timeline, or scope
-4. **Genuine**: Authentic intent, realistic expectations, transparent about challenges
-5. **Compliant**: Follows NEAR governance rules and community standards
-6. **Justified**: Strong rationale for funding amount and approach
+4. **Compliant**: Follows NEAR governance rules and community standards
+5. **Justified**: Strong rationale for funding amount and approach
+6. **Measurable**: Clear success metrics and evaluation criteria
+
+**Attention Scores (informational):**
+- **Relevant**: How aligned is this with NEAR ecosystem priorities? (high/medium/low)
+- **Material**: What's the potential impact and significance? (high/medium/low)
+
+**Quality Score**: Percentage of quality criteria passed (need 100% to pass)
+**Attention Score**: Combined relevance and materiality score (0.0 to 1.0)
 
 **Your Tasks:**
 - To screen: use screen_proposal tool
@@ -92,39 +110,43 @@ ${
     ? `
 **Last Screening Results:**
 Overall Pass: ${currentState.evaluation.overallPass ? "YES" : "NO"}
-Failed Criteria: ${
+Quality Score: ${(currentState.evaluation.qualityScore * 100).toFixed(0)}% (${
+        currentState.evaluation.qualityScore === 1.0
+          ? "Perfect!"
+          : "Needs improvement"
+      })
+Attention Score: ${(currentState.evaluation.attentionScore * 100).toFixed(
+        0
+      )}% (Relevant: ${
+        currentState.evaluation.relevant?.score || "unknown"
+      }, Material: ${currentState.evaluation.material?.score || "unknown"})
+
+Failed Quality Criteria: ${
         Object.entries(currentState.evaluation)
           .filter(
             ([key, val]: [string, any]) =>
-              key !== "overallPass" &&
-              key !== "summary" &&
-              key !== "alignment" &&
+              [
+                "complete",
+                "legible",
+                "consistent",
+                "compliant",
+                "justified",
+                "measurable",
+              ].includes(key) &&
               typeof val === "object" &&
               val.pass === false
           )
-          .map(([key]) => key)
-          .join(", ") || "None"
+          .map(([key, val]: [string, any]) => `${key} (${val.reason})`)
+          .join("; ") || "None - all quality criteria passed!"
       }
 `
     : ""
 }`;
 }
 
-// Screen proposal using existing API
+// Screen proposal using shared evaluation helper
 async function screenProposal(title: string, content: string) {
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-  const response = await fetch(`${baseUrl}/api/screen`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, proposal: content }),
-  });
-
-  if (!response.ok) {
-    throw new Error("Screening failed");
-  }
-
-  const data = await response.json();
-  return data.evaluation;
+  return requestEvaluation(title, content);
 }
 
 // Generate unique IDs
@@ -147,7 +169,7 @@ export default async function handler(
   try {
     const { messages, threadId, runId: clientRunId, state } = req.body;
 
-    console.log("Agent API called with:", {
+    console.log("[Agent] API called with:", {
       messagesCount: messages?.length,
       hasState: !!state,
       hasApiKey: !!process.env.NEAR_AI_CLOUD_API_KEY,
@@ -208,7 +230,7 @@ export default async function handler(
       };
     }
 
-    console.log("Tool choice:", toolChoice);
+    console.log("[Agent] Tool choice:", toolChoice);
 
     // Direct fetch to NEAR AI Cloud (NON-STREAMING)
     const nearAIResponse = await fetch(
@@ -229,11 +251,15 @@ export default async function handler(
       }
     );
 
-    console.log("NEAR AI Response status:", nearAIResponse.status);
+    console.log("[Agent] NEAR AI Response status:", nearAIResponse.status);
 
     if (!nearAIResponse.ok) {
       const errorText = await nearAIResponse.text();
-      console.error("NEAR AI API error:", nearAIResponse.status, errorText);
+      console.error(
+        "[Agent] NEAR AI API error:",
+        nearAIResponse.status,
+        errorText
+      );
       return res.status(500).json({
         error: `NEAR AI API error: ${nearAIResponse.status}`,
         details: errorText,
@@ -359,6 +385,14 @@ export default async function handler(
         if (toolName === "screen_proposal") {
           result = await screenProposal(args.title, args.content);
 
+          console.log(
+            `[Agent] Screening complete - Quality: ${(
+              result.qualityScore * 100
+            ).toFixed(0)}%, Attention: ${(result.attentionScore * 100).toFixed(
+              0
+            )}%`
+          );
+
           writeEvent({
             type: EventType.STATE_DELTA,
             delta: [
@@ -424,7 +458,7 @@ export default async function handler(
 
     res.end();
   } catch (error: any) {
-    console.error("Agent error:", error);
+    console.error("[Agent] Error:", error);
     const errorEvent: AGUIEvent = {
       type: EventType.RUN_ERROR,
       message: error.message || "Unknown error",

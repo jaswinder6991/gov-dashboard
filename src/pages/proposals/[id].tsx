@@ -1,19 +1,41 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import VersionSelector from "@/components/VersionSelector";
-import ProposalContent from "@/components/ProposalContent";
-import { ScreeningBadge } from "@/components/ScreeningBadge";
-import { ScreeningButton } from "@/components/ScreeningButton";
-import { Markdown } from "@/components/Markdown";
-import { ProposalChatbot } from "@/components/chat/ProposalChatbot";
+import ProposalContent from "@/components/proposal/ProposalContent";
+import { ScreeningBadge } from "@/components/proposal/screening/ScreeningBadge";
+import { ScreeningButton } from "@/components/proposal/screening/ScreeningButton";
+import { Markdown } from "@/components/proposal/Markdown";
+import { ProposalChatbot } from "@/components/proposal/ProposalChatbot";
 import { useNear } from "@/hooks/useNear";
 import type { Evaluation } from "@/types/evaluation";
-import { reconstructRevisionContent } from "@/lib/revisionContentUtils";
+import { reconstructRevisionContent } from "@/lib/utils/revisionContentUtils";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  ExternalLink,
+  MessageSquare,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  Glasses,
+  ChevronDown,
+  ChevronUp,
+  AlertCircle,
+  MessagesSquare,
+} from "lucide-react";
+import { ProposalFrontmatter } from "@/lib/utils/metadata";
 
 interface ProposalDetail {
   id: number;
   title: string;
   content: string;
+  contentWithoutFrontmatter: string;
+  metadata: ProposalFrontmatter;
+  version: number;
   created_at: string;
   username: string;
   topic_id: number;
@@ -33,6 +55,12 @@ interface Reply {
   created_at: string;
   cooked: string;
   post_number: number;
+  avatar_template?: string;
+  like_count?: number;
+  reply_to_post_number?: number | null;
+  reply_to_user?: {
+    username: string;
+  } | null;
 }
 
 interface Revision {
@@ -56,6 +84,8 @@ interface ScreeningData {
   nearAccount: string;
   timestamp: string;
   revisionNumber: number;
+  qualityScore: number;
+  attentionScore: number;
 }
 
 interface SummaryResponse {
@@ -77,35 +107,38 @@ export default function ProposalDetail() {
   const [isContentExpanded, setIsContentExpanded] = useState(false);
   const [showRevisions, setShowRevisions] = useState(false);
   const [showReplies, setShowReplies] = useState(false);
-
-  // Version control state
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<number>(1);
   const [showDiffHighlights, setShowDiffHighlights] = useState(false);
   const [versionContent, setVersionContent] = useState<string>("");
   const [versionDiffHtml, setVersionDiffHtml] = useState<string>("");
-
-  // Summary states
+  const [revisionsLoading, setRevisionsLoading] = useState(false);
   const [proposalSummary, setProposalSummary] = useState<string | null>(null);
   const [proposalSummaryLoading, setProposalSummaryLoading] = useState(false);
   const [revisionSummary, setRevisionSummary] = useState<string | null>(null);
   const [revisionSummaryLoading, setRevisionSummaryLoading] = useState(false);
-  const [topicSummary, setTopicSummary] = useState<string | null>(null);
-  const [topicSummaryLoading, setTopicSummaryLoading] = useState(false);
   const [replySummaries, setReplySummaries] = useState<Record<number, string>>(
     {}
   );
   const [replySummaryLoading, setReplySummaryLoading] = useState<
     Record<number, boolean>
   >({});
+  const [discussionSummary, setDiscussionSummary] = useState<string | null>(
+    null
+  );
+  const [discussionSummaryVisible, setDiscussionSummaryVisible] =
+    useState(false);
+  const [discussionSummaryLoading, setDiscussionSummaryLoading] =
+    useState(false);
+  const [discussionSummaryError, setDiscussionSummaryError] = useState("");
 
-  // Get wallet and account from useNear hook
   const { wallet, signedAccountId } = useNear();
 
   useEffect(() => {
     if (id) {
       fetchProposal(id as string);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const fetchProposal = async (proposalId: string) => {
@@ -114,42 +147,79 @@ export default function ProposalDetail() {
       if (!response.ok) {
         throw new Error("Failed to fetch proposal");
       }
-
       const data = await response.json();
       setProposal(data);
-      setVersionContent(data.content);
+      setVersionContent(data.contentWithoutFrontmatter);
 
-      const revisionsResponse = await fetch(
-        `/api/proposals/${proposalId}/revisions`
-      );
-
-      if (revisionsResponse.ok) {
-        const revisionsData = await revisionsResponse.json();
-        const latestRevision = revisionsData.current_version || 1;
-        setCurrentRevision(latestRevision);
-        setSelectedVersion(latestRevision);
-
-        if (revisionsData.revisions && revisionsData.revisions.length > 0) {
-          setRevisions(revisionsData.revisions);
-
-          const currentRevisionData = revisionsData.revisions.find(
-            (r: Revision) => r.version === latestRevision
-          );
-          if (currentRevisionData?.body_changes?.inline) {
-            setVersionDiffHtml(currentRevisionData.body_changes.inline);
-          }
-        }
-
-        fetchScreening(proposalId, latestRevision);
-      } else {
-        setCurrentRevision(1);
-        setSelectedVersion(1);
-        fetchScreening(proposalId, 1);
-      }
+      const initialRevision = data.version || 1;
+      setCurrentRevision(initialRevision);
+      setSelectedVersion(initialRevision);
+      fetchScreening(proposalId, initialRevision);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchRevisions = async (proposalId: string) => {
+    setRevisionsLoading(true);
+    try {
+      const res = await fetch(`/api/proposals/${proposalId}/revisions`);
+      if (!res.ok) throw new Error("Failed to fetch revisions");
+      const data = await res.json();
+      const latestRevision = data.current_version || 1;
+      setCurrentRevision(latestRevision);
+      setSelectedVersion(latestRevision);
+
+      if (Array.isArray(data.revisions) && data.revisions.length > 0) {
+        setRevisions(data.revisions);
+        const currentRevisionData = data.revisions.find(
+          (r: Revision) => r.version === latestRevision
+        );
+
+        console.log("Latest revision:", latestRevision);
+        console.log("Found revision data:", !!currentRevisionData);
+        console.log(
+          "Has inline diff:",
+          !!currentRevisionData?.body_changes?.inline
+        );
+        console.log(
+          "Diff length:",
+          currentRevisionData?.body_changes?.inline?.length
+        );
+
+        if (latestRevision > 1 && currentRevisionData) {
+          try {
+            const { content: reconstructedContent } =
+              reconstructRevisionContent(
+                proposal?.contentWithoutFrontmatter || "",
+                proposal?.title || "",
+                data.revisions,
+                latestRevision
+              );
+            setVersionContent(reconstructedContent);
+          } catch (error) {
+            console.error("Error reconstructing latest content:", error);
+          }
+        }
+
+        if (currentRevisionData?.body_changes?.inline) {
+          console.log("Setting versionDiffHtml");
+          setVersionDiffHtml(currentRevisionData.body_changes.inline);
+        } else {
+          console.log("Clearing versionDiffHtml");
+          setVersionDiffHtml("");
+        }
+      } else {
+        setRevisions([]);
+        setVersionDiffHtml("");
+      }
+      await fetchScreening(proposalId, latestRevision);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setRevisionsLoading(false);
     }
   };
 
@@ -158,7 +228,6 @@ export default function ProposalDetail() {
       const response = await fetch(
         `/api/getAnalysis/${topicId}?revisionNumber=${revisionNumber}`
       );
-
       if (response.status === 404) {
         setScreening(null);
       } else if (response.ok) {
@@ -177,52 +246,47 @@ export default function ProposalDetail() {
   const handleVersionChange = async (version: number) => {
     setSelectedVersion(version);
     setRevisionSummary(null);
-    setShowDiffHighlights(false);
 
     if (version === currentRevision) {
-      console.log("📄 Using current version");
-      setVersionContent(proposal?.content || "");
-
+      setVersionContent(proposal?.contentWithoutFrontmatter || "");
       const latestRevision = revisions.find((r) => r.version === version);
-
       if (latestRevision && latestRevision.body_changes?.inline) {
-        console.log("✅ Setting diff HTML for current version");
         setVersionDiffHtml(latestRevision.body_changes.inline);
       } else {
-        console.log("⚠️ No inline diff for current version");
         setVersionDiffHtml("");
       }
     } else {
-      console.log("🔍 Reconstructing version:", version);
-
       try {
-        const { content: reconstructedContent, title: reconstructedTitle } =
-          reconstructRevisionContent(
-            proposal?.content || "",
-            proposal?.title || "",
-            revisions,
-            version
-          );
-
+        const { content: reconstructedContent } = reconstructRevisionContent(
+          proposal?.contentWithoutFrontmatter || "",
+          proposal?.title || "",
+          revisions,
+          version
+        );
         setVersionContent(reconstructedContent);
-
         const revision = revisions.find((r) => r.version === version);
         if (revision && revision.body_changes?.inline) {
-          console.log("✅ Setting diff HTML for historical version");
           setVersionDiffHtml(revision.body_changes.inline);
         } else {
-          console.log("⚠️ No inline diff for this version");
           setVersionDiffHtml("");
         }
       } catch (error) {
-        console.error("❌ Error reconstructing content:", error);
-        setVersionContent(proposal?.content || "");
+        console.error("Error reconstructing content:", error);
+        setVersionContent(proposal?.contentWithoutFrontmatter || "");
         setVersionDiffHtml("");
       }
     }
 
     if (id) {
       fetchScreening(id as string, version);
+    }
+  };
+
+  const handleToggleRevisions = async () => {
+    const next = !showRevisions;
+    setShowRevisions(next);
+    if (next && revisions.length === 0 && id) {
+      await fetchRevisions(id as string);
     }
   };
 
@@ -248,7 +312,6 @@ export default function ProposalDetail() {
 
   const fetchRevisionSummary = async () => {
     if (!id) return;
-
     setRevisionSummaryLoading(true);
     try {
       const response = await fetch(`/api/proposals/${id}/revisions/summarize`, {
@@ -264,26 +327,6 @@ export default function ProposalDetail() {
       console.error("Error fetching revision summary:", error);
     } finally {
       setRevisionSummaryLoading(false);
-    }
-  };
-
-  const fetchTopicSummary = async () => {
-    if (!id) return;
-    setTopicSummaryLoading(true);
-    try {
-      const response = await fetch(`/api/discourse/topics/${id}/summarize`, {
-        method: "POST",
-      });
-      if (response.ok) {
-        const data: SummaryResponse = await response.json();
-        setTopicSummary(data.summary);
-      } else {
-        console.error("Failed to fetch topic summary");
-      }
-    } catch (error) {
-      console.error("Error fetching topic summary:", error);
-    } finally {
-      setTopicSummaryLoading(false);
     }
   };
 
@@ -321,17 +364,50 @@ export default function ProposalDetail() {
     return num.toLocaleString();
   };
 
+  const formatScore = (score: number) => {
+    return `${(score * 100).toFixed(0)}%`;
+  };
+
+  const handleDiscussionSummary = async () => {
+    if (!id) return;
+    if (discussionSummary) {
+      setDiscussionSummaryVisible((prev) => !prev);
+      return;
+    }
+
+    setDiscussionSummaryLoading(true);
+    setDiscussionSummaryError("");
+    try {
+      const response = await fetch(`/api/discourse/topics/${id}/summarize`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to generate summary");
+      }
+      const data: SummaryResponse = await response.json();
+      setDiscussionSummary(data.summary);
+      setDiscussionSummaryVisible(true);
+    } catch (err: any) {
+      setDiscussionSummaryError(err.message || "Failed to generate summary");
+    } finally {
+      setDiscussionSummaryLoading(false);
+    }
+  };
+
   if (loading) {
     return (
-      <div className="page-wrapper">
-        <div
-          style={{ maxWidth: "1400px", margin: "0 auto", padding: "2rem 1rem" }}
-        >
-          <div className="card">
-            <div style={{ textAlign: "center", padding: "2rem" }}>
-              <p>Loading proposal...</p>
-            </div>
-          </div>
+      <div className="min-h-screen bg-background">
+        <div className="max-w-7xl mx-auto p-8">
+          <Card>
+            <CardContent className="pt-6">
+              <div className="space-y-4">
+                <Skeleton className="h-8 w-3/4" />
+                <Skeleton className="h-4 w-1/2" />
+                <Skeleton className="h-32 w-full" />
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
     );
@@ -339,16 +415,11 @@ export default function ProposalDetail() {
 
   if (error || !proposal) {
     return (
-      <div className="page-wrapper">
-        <div
-          style={{ maxWidth: "1400px", margin: "0 auto", padding: "2rem 1rem" }}
-        >
-          <div className="card">
-            <div className="alert alert-error">
-              <span className="alert-icon">⚠</span>
-              <p className="alert-text">{error || "Proposal not found"}</p>
-            </div>
-          </div>
+      <div className="min-h-screen bg-background">
+        <div className="max-w-7xl mx-auto p-8">
+          <Alert variant="destructive">
+            <AlertDescription>{error || "Proposal not found"}</AlertDescription>
+          </Alert>
         </div>
       </div>
     );
@@ -357,180 +428,81 @@ export default function ProposalDetail() {
   const daysSinceActivity = getDaysSinceActivity(proposal.last_posted_at);
 
   return (
-    <div className="page-wrapper">
-      <div
-        style={{ maxWidth: "1400px", margin: "0 auto", padding: "2rem 1rem" }}
-      >
-        {/* Header: Title and Metadata - FULL WIDTH */}
-        <div className="card" style={{ marginBottom: "2rem" }}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "flex-start",
-              marginBottom: "0.75rem",
-            }}
-          >
-            <h1 className="page-title" style={{ margin: 0, fontSize: "2rem" }}>
-              {proposal.title}
-            </h1>
+    <div className="min-h-screen bg-background">
+      <div className="max-w-7xl mx-auto p-8">
+        <Card className="mb-8">
+          <CardHeader>
+            <div className="flex items-start justify-between gap-4">
+              <CardTitle className="text-3xl">{proposal.title}</CardTitle>
 
-            {screening && screening.revisionNumber === selectedVersion && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  flexShrink: 0,
-                  marginLeft: "1rem",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "0.875rem",
-                    color: "#6b7280",
-                    fontWeight: "600",
-                  }}
-                >
-                  {screening.evaluation.overallPass ? "Pass" : "Fail"}
+              {proposal.metadata?.category && (
+                <div className="flex items-center gap-2 flex-shrink-0 text-sm tracking-wide text-muted-foreground">
+                  <span className="uppercase">
+                    {proposal.metadata.category}
+                  </span>
                 </div>
-                <div
-                  style={{
-                    width: "32px",
-                    height: "32px",
-                    borderRadius: "50%",
-                    background: screening.evaluation.overallPass
-                      ? "#d1fae5"
-                      : "#fee2e2",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: "1rem",
-                    fontWeight: "700",
-                    color: screening.evaluation.overallPass
-                      ? "#065f46"
-                      : "#991b1b",
-                  }}
-                >
-                  {screening.evaluation.overallPass ? "✓" : "✕"}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              flexWrap: "wrap",
-              gap: "1rem",
-              fontSize: "0.875rem",
-              color: "#6b7280",
-            }}
-          >
-            <div>
-              <strong style={{ color: "#374151" }}>@{proposal.username}</strong>
-              {proposal.near_wallet && (
-                <span style={{ marginLeft: "0.75rem" }}>
-                  • {proposal.near_wallet}
-                </span>
               )}
-              <span style={{ marginLeft: "0.75rem" }}>
-                •{" "}
-                {new Date(proposal.created_at).toLocaleDateString("en-US", {
-                  year: "numeric",
-                  month: "short",
-                  day: "numeric",
-                })}
-              </span>
-              <span style={{ marginLeft: "0.75rem" }}>
-                •{" "}
+            </div>
+
+            <div className="flex items-center justify-between flex-wrap gap-4 text-sm text-muted-foreground">
+              <div className="flex items-center gap-4">
+                <span className="font-semibold text-foreground">
+                  @{proposal.username}
+                </span>
+                {proposal.near_wallet && (
+                  <>
+                    <Separator orientation="vertical" className="h-4" />
+                    <span>{proposal.near_wallet}</span>
+                  </>
+                )}
+                <Separator orientation="vertical" className="h-4" />
+                <span>
+                  {new Date(proposal.created_at).toLocaleDateString("en-US", {
+                    year: "numeric",
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </span>
+                <Separator orientation="vertical" className="h-4" />
                 <a
-                  href={`https://discuss.near.vote/t/${proposal.topic_slug}/${proposal.topic_id}`}
+                  href={`https://gov.near.org/t/${proposal.topic_slug}/${proposal.topic_id}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{ color: "#2563eb", textDecoration: "none" }}
-                  onMouseEnter={(e) =>
-                    (e.currentTarget.style.textDecoration = "underline")
-                  }
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.textDecoration = "none")
-                  }
+                  className="flex items-center gap-1 text-primary hover:underline"
                 >
-                  View on Discourse →
+                  View on Discourse
+                  <ExternalLink className="h-3 w-3" />
                 </a>
-              </span>
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                gap: "1.5rem",
-                alignItems: "center",
-              }}
-            >
-              <div>
-                <span style={{ fontWeight: "600", color: "#374151" }}>
-                  {formatNumber(proposal.reply_count)}
-                </span>{" "}
-                replies
               </div>
-              <div>
-                <span style={{ fontWeight: "600", color: "#374151" }}>
-                  {daysSinceActivity}d
-                </span>{" "}
-                ago
+
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="h-4 w-4" />
+                  <span className="font-semibold text-foreground">
+                    {formatNumber(proposal.reply_count)}
+                  </span>
+                  <span>replies</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Clock className="h-4 w-4" />
+                  <span className="font-semibold text-foreground">
+                    {daysSinceActivity}d
+                  </span>
+                  <span>ago</span>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
+          </CardHeader>
+        </Card>
 
-        {/* TWO-COLUMN LAYOUT */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "2fr 1fr",
-            gap: "2rem",
-            alignItems: "start",
-            height: "calc(100vh - 250px)",
-          }}
-        >
-          {/* LEFT COLUMN */}
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: "2rem",
-              height: "100%",
-              overflowY: "auto",
-              paddingRight: "0.5rem",
-            }}
-          >
-            {/* Proposal Content */}
-            <div className="card" style={{ position: "relative" }}>
-              {showRevisions && (
-                <VersionSelector
-                  currentRevision={currentRevision}
-                  selectedVersion={selectedVersion}
-                  revisions={revisions}
-                  onVersionChange={handleVersionChange}
-                  showDiffHighlights={showDiffHighlights}
-                  onToggleDiff={setShowDiffHighlights}
-                  onSummarizeChanges={fetchRevisionSummary}
-                  revisionSummary={revisionSummary}
-                  revisionSummaryLoading={revisionSummaryLoading}
-                  onHideSummary={() => setRevisionSummary(null)}
-                  versionDiffHtml={versionDiffHtml}
-                />
-              )}
-
+        <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-8 items-start">
+          <div className="space-y-8 min-h-0">
+            <Card className="rounded-2xl border-border/60 shadow-sm">
               <ProposalContent
                 content={
-                  showDiffHighlights && versionDiffHtml
-                    ? versionDiffHtml
-                    : versionContent || proposal?.content || ""
+                  versionContent || proposal.contentWithoutFrontmatter || ""
                 }
+                metadata={proposal.metadata || {}}
                 isExpanded={isContentExpanded}
                 onToggleExpand={setIsContentExpanded}
                 proposalSummary={proposalSummary}
@@ -538,376 +510,307 @@ export default function ProposalDetail() {
                 onFetchProposalSummary={fetchProposalSummary}
                 onHideProposalSummary={() => setProposalSummary(null)}
                 showRevisions={showRevisions}
-                onToggleRevisions={() => setShowRevisions(!showRevisions)}
-                hasRevisions={revisions.length > 1}
+                onToggleRevisions={handleToggleRevisions}
+                hasRevisions={currentRevision > 1}
+                currentRevision={currentRevision}
                 revisionCount={revisions.length}
+                showDiffHighlights={showDiffHighlights}
+                versionDiffHtml={versionDiffHtml}
+                revisions={revisions}
+                selectedVersion={selectedVersion}
+                onVersionChange={handleVersionChange}
+                onToggleDiff={setShowDiffHighlights}
+                onSummarizeChanges={fetchRevisionSummary}
+                revisionSummary={revisionSummary}
+                revisionSummaryLoading={revisionSummaryLoading}
+                onHideRevisionSummary={() => setRevisionSummary(null)}
               />
+            </Card>
 
-              <style jsx>{`
-                .card :global(table) {
-                  width: 100%;
-                  border-collapse: collapse;
-                  margin: 1rem 0;
-                  font-size: 0.875rem;
-                }
-                .card :global(table th) {
-                  background-color: #f3f4f6;
-                  padding: 0.75rem;
-                  text-align: left;
-                  font-weight: 600;
-                  border: 1px solid #d1d5db;
-                }
-                .card :global(table td) {
-                  padding: 0.75rem;
-                  border: 1px solid #d1d5db;
-                }
-                .card :global(table tr:nth-child(even)) {
-                  background-color: #f9fafb;
-                }
-                .card :global(a) {
-                  color: #2563eb;
-                  text-decoration: underline;
-                }
-                .card :global(a:hover) {
-                  color: #1d4ed8;
-                }
-              `}</style>
-            </div>
-
-            {/* Discussion Section */}
             {proposal.replies && proposal.replies.length > 0 && (
-              <div className="card">
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: "1.5rem",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "1rem",
-                    }}
-                  >
-                    <h2 style={{ fontSize: "1.125rem", margin: 0 }}>
-                      Discussion
-                    </h2>
-
-                    <button
-                      onClick={() => {
-                        if (topicSummary) {
-                          setTopicSummary(null);
-                        } else {
-                          fetchTopicSummary();
-                        }
-                      }}
-                      disabled={topicSummaryLoading}
-                      style={{
-                        padding: "0.5rem 1rem",
-                        fontSize: "0.875rem",
-                        fontWeight: "600",
-                        color: topicSummary ? "#6b7280" : "white",
-                        background: topicSummary ? "white" : "#0F4FD8",
-                        border: topicSummary
-                          ? "1px solid #d1d5db"
-                          : "1px solid #0F4FD8",
-                        borderRadius: "5px",
-                        cursor: topicSummaryLoading ? "not-allowed" : "pointer",
-                        transition: "all 0.2s",
-                        opacity: topicSummaryLoading ? 0.6 : 1,
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!topicSummaryLoading) {
-                          e.currentTarget.style.background = topicSummary
-                            ? "#f9fafb"
-                            : "#2C65DF";
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = topicSummary
-                          ? "white"
-                          : "#0F4FD8";
-                      }}
-                    >
-                      {topicSummaryLoading
-                        ? "Analyzing..."
-                        : topicSummary
-                        ? "Hide Summary"
-                        : "Summarize"}
-                    </button>
-                  </div>
-
-                  <button
-                    onClick={() => setShowReplies(!showReplies)}
-                    style={{
-                      padding: "0.5rem 1rem",
-                      fontSize: "0.875rem",
-                      fontWeight: "600",
-                      color: "#6b7280",
-                      background: "white",
-                      border: "1px solid #d1d5db",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      transition: "all 0.2s",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "#f9fafb";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "white";
-                    }}
-                  >
-                    {showReplies ? "Hide" : "Show"} Replies (
-                    {proposal.replies.length})
-                  </button>
+              <Card className="rounded-2xl border-border/60 shadow-sm">
+                <div className="sticky top-16 z-20 bg-card border-b">
+                  <CardHeader className="pb-4">
+                    <div className="flex items-center justify-between flex-wrap gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2 text-base font-semibold">
+                          <MessagesSquare className="h-5 w-5 text-muted-foreground" />
+                          Discussion
+                        </div>
+                        <Button
+                          onClick={handleDiscussionSummary}
+                          disabled={discussionSummaryLoading}
+                          variant={
+                            discussionSummary && discussionSummaryVisible
+                              ? "outline"
+                              : "default"
+                          }
+                          size="sm"
+                          className="gap-2"
+                        >
+                          {discussionSummaryLoading ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin" />{" "}
+                              Generating...
+                            </>
+                          ) : discussionSummary ? (
+                            discussionSummaryVisible ? (
+                              <>
+                                <ChevronUp className="h-4 w-4" /> Hide Summary
+                              </>
+                            ) : (
+                              <>
+                                <ChevronDown className="h-4 w-4" /> Show Summary
+                              </>
+                            )
+                          ) : (
+                            <>Summarize</>
+                          )}
+                        </Button>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setShowReplies((prev) => !prev)}
+                          className="gap-2"
+                        >
+                          {showReplies ? (
+                            <>
+                              <ChevronUp className="h-4 w-4" /> Hide
+                            </>
+                          ) : (
+                            <>
+                              <Glasses className="h-4 w-4" /> Show
+                            </>
+                          )}{" "}
+                          Replies ({proposal.replies.length})
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
                 </div>
 
-                {topicSummary && (
-                  <div
-                    style={{
-                      padding: "1rem",
-                      background: "#f0fdf4",
-                      border: "1px solid #bbf7d0",
-                      borderRadius: "6px",
-                      marginBottom: "1.5rem",
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: "0.875rem",
-                        fontWeight: "600",
-                        color: "#047857",
-                        marginBottom: "0.5rem",
-                      }}
-                    >
-                      Discussion Summary
-                    </div>
-                    <Markdown
-                      content={topicSummary}
-                      style={{
-                        fontSize: "0.875rem",
-                        lineHeight: "1.6",
-                        color: "#374151",
-                      }}
-                    />
+                {discussionSummaryError && (
+                  <div className="px-6 pt-4">
+                    <Alert variant="destructive">
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertDescription>
+                        {discussionSummaryError}
+                      </AlertDescription>
+                    </Alert>
                   </div>
                 )}
 
-                {showReplies && (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "1.5rem",
-                    }}
-                  >
-                    {proposal.replies.map((reply) => (
-                      <div
-                        key={reply.id}
-                        style={{
-                          padding: "1rem",
-                          backgroundColor: "#f9fafb",
-                          borderRadius: "0.5rem",
-                          borderLeft: "3px solid #e5e7eb",
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            marginBottom: "0.75rem",
-                            fontSize: "0.875rem",
-                            color: "#6b7280",
-                          }}
-                        >
-                          <div>
-                            <strong style={{ color: "#374151" }}>
-                              @{reply.username}
-                            </strong>
-                            <span style={{ marginLeft: "0.5rem" }}>
-                              #{reply.post_number}
-                            </span>
-                          </div>
-                          <div>
-                            {new Date(reply.created_at).toLocaleDateString(
-                              "en-US",
-                              {
-                                year: "numeric",
-                                month: "short",
-                                day: "numeric",
-                              }
-                            )}{" "}
-                            at{" "}
-                            {new Date(reply.created_at).toLocaleTimeString(
-                              "en-US",
-                              {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              }
-                            )}
-                          </div>
+                {(showReplies ||
+                  (discussionSummary && discussionSummaryVisible)) && (
+                  <CardContent className="pt-6 space-y-4">
+                    {discussionSummary && discussionSummaryVisible && (
+                      <div className="space-y-4">
+                        <div className="p-4 bg-blue-50 border-l-4 border-blue-500 rounded-lg">
+                          <Markdown
+                            content={discussionSummary}
+                            className="text-sm leading-relaxed"
+                          />
                         </div>
-                        <div
-                          style={{
-                            lineHeight: "1.6",
-                            color: "#374151",
-                            marginBottom: "0.75rem",
-                          }}
-                          dangerouslySetInnerHTML={{ __html: reply.cooked }}
-                        />
-
-                        {!replySummaries[reply.id] ? (
-                          <button
-                            onClick={() => fetchReplySummary(reply.id)}
-                            disabled={replySummaryLoading[reply.id]}
-                            style={{
-                              padding: "0.375rem 0.75rem",
-                              fontSize: "0.75rem",
-                              fontWeight: "600",
-                              color: "#ea580c",
-                              background: "white",
-                              border: "1px solid #ea580c",
-                              borderRadius: "4px",
-                              cursor: replySummaryLoading[reply.id]
-                                ? "not-allowed"
-                                : "pointer",
-                              transition: "all 0.2s",
-                              opacity: replySummaryLoading[reply.id] ? 0.6 : 1,
-                            }}
-                            onMouseEnter={(e) => {
-                              if (!replySummaryLoading[reply.id]) {
-                                e.currentTarget.style.background = "#fff7ed";
-                              }
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.background = "white";
-                            }}
-                          >
-                            {replySummaryLoading[reply.id]
-                              ? "Summarizing..."
-                              : "Summarize"}
-                          </button>
-                        ) : (
-                          <div
-                            style={{
-                              padding: "0.75rem",
-                              background: "#fff7ed",
-                              border: "1px solid #fed7aa",
-                              borderRadius: "4px",
-                              marginTop: "0.5rem",
-                            }}
-                          >
-                            <div
-                              style={{
-                                display: "flex",
-                                justifyContent: "space-between",
-                                alignItems: "center",
-                                marginBottom: "0.5rem",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  fontSize: "0.75rem",
-                                  fontWeight: "600",
-                                  color: "#c2410c",
-                                }}
-                              >
-                                Summary
-                              </div>
-                              <button
-                                onClick={() => {
-                                  setReplySummaries((prev) => {
-                                    const newSummaries = { ...prev };
-                                    delete newSummaries[reply.id];
-                                    return newSummaries;
-                                  });
-                                }}
-                                style={{
-                                  fontSize: "0.75rem",
-                                  color: "#6b7280",
-                                  background: "none",
-                                  border: "none",
-                                  cursor: "pointer",
-                                  padding: "0.25rem 0.5rem",
-                                }}
-                              >
-                                Hide
-                              </button>
-                            </div>
-                            <Markdown
-                              content={replySummaries[reply.id]}
-                              style={{
-                                fontSize: "0.75rem",
-                                lineHeight: "1.6",
-                                color: "#374151",
-                              }}
-                            />
-                          </div>
-                        )}
+                        <Separator />
+                        <div className="flex items-start gap-2">
+                          <Badge variant="secondary" className="text-xs">
+                            AI Generated
+                          </Badge>
+                          <p className="text-xs text-muted-foreground leading-relaxed">
+                            This is an AI-generated summary. Read the full
+                            discussion for complete context.
+                          </p>
+                        </div>
                       </div>
-                    ))}
-                  </div>
+                    )}
+
+                    {showReplies && (
+                      <div className="space-y-4">
+                        {proposal.replies.map((reply) => (
+                          <Card key={reply.id} className="bg-muted/50">
+                            <CardContent className="pt-6">
+                              <div className="flex justify-between items-start mb-3 text-sm text-muted-foreground">
+                                <div className="flex items-center gap-3">
+                                  {reply.avatar_template ? (
+                                    <img
+                                      src={`https://gov.near.org${reply.avatar_template.replace(
+                                        "{size}",
+                                        "48"
+                                      )}`}
+                                      alt={`${reply.username} avatar`}
+                                      className="w-10 h-10 rounded-full"
+                                      onError={(e) => {
+                                        // Fallback to initials if image fails to load
+                                        const target =
+                                          e.target as HTMLImageElement;
+                                        target.style.display = "none";
+                                        if (target.nextElementSibling) {
+                                          (
+                                            target.nextElementSibling as HTMLElement
+                                          ).style.display = "flex";
+                                        }
+                                      }}
+                                    />
+                                  ) : null}
+                                  <div
+                                    className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-xs font-semibold text-primary"
+                                    style={{
+                                      display: reply.avatar_template
+                                        ? "none"
+                                        : "flex",
+                                    }}
+                                  >
+                                    {reply.username
+                                      .substring(0, 2)
+                                      .toUpperCase()}
+                                  </div>
+                                  <div>
+                                    <span className="font-semibold text-foreground">
+                                      @{reply.username}
+                                    </span>
+                                    <span className="ml-2">
+                                      #{reply.post_number}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div>
+                                  {new Date(
+                                    reply.created_at
+                                  ).toLocaleDateString("en-US", {
+                                    year: "numeric",
+                                    month: "short",
+                                    day: "numeric",
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })}
+                                </div>
+                              </div>
+
+                              <div
+                                className="prose prose-sm max-w-none mb-3
+                                [&_aside.quote]:border-l-4 [&_aside.quote]:border-primary/30 [&_aside.quote]:pl-4 [&_aside.quote]:py-2 [&_aside.quote]:bg-muted/30 [&_aside.quote]:rounded-r [&_aside.quote]:my-3
+                                [&_aside.quote_.title]:flex [&_aside.quote_.title]:items-center [&_aside.quote_.title]:gap-2 [&_aside.quote_.title]:mb-2 [&_aside.quote_.title]:font-semibold [&_aside.quote_.title]:text-sm [&_aside.quote_.title]:text-foreground
+                                [&_aside.quote_img.avatar]:w-6 [&_aside.quote_img.avatar]:h-6 [&_aside.quote_img.avatar]:rounded-full [&_aside.quote_img.avatar]:inline-block
+                                [&_img.emoji]:inline [&_img.emoji]:align-middle [&_img.emoji]:w-5 [&_img.emoji]:h-5 [&_img.emoji]:mx-0"
+                                dangerouslySetInnerHTML={{
+                                  __html: reply.cooked
+                                    .replace(
+                                      /href="\/u\//g,
+                                      'href="https://gov.near.org/u/'
+                                    )
+                                    .replace(
+                                      /href="\/t\//g,
+                                      'href="https://gov.near.org/t/'
+                                    )
+                                    .replace(
+                                      /href="\/c\//g,
+                                      'href="https://gov.near.org/c/'
+                                    )
+                                    .replace(
+                                      /src="\/user_avatar\//g,
+                                      'src="https://gov.near.org/user_avatar/'
+                                    ),
+                                }}
+                              />
+
+                              {!replySummaries[reply.id] ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => fetchReplySummary(reply.id)}
+                                  disabled={replySummaryLoading[reply.id]}
+                                >
+                                  {replySummaryLoading[reply.id]
+                                    ? "Summarizing..."
+                                    : "Summarize"}
+                                </Button>
+                              ) : (
+                                <Alert className="bg-orange-50 border-orange-200 mt-3">
+                                  <AlertDescription>
+                                    <div className="flex justify-between items-center mb-2">
+                                      <span className="font-semibold text-orange-900 text-xs">
+                                        Summary
+                                      </span>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-6 text-xs"
+                                        onClick={() => {
+                                          setReplySummaries((prev) => {
+                                            const newSummaries = { ...prev };
+                                            delete newSummaries[reply.id];
+                                            return newSummaries;
+                                          });
+                                        }}
+                                      >
+                                        Hide
+                                      </Button>
+                                    </div>
+                                    <Markdown
+                                      content={replySummaries[reply.id]}
+                                      className="text-xs"
+                                    />
+                                  </AlertDescription>
+                                </Alert>
+                              )}
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
                 )}
-              </div>
+              </Card>
             )}
           </div>
 
-          {/* RIGHT COLUMN */}
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: "1.5rem",
-              height: "100%",
-              overflowY: "auto",
-              paddingRight: "0.5rem",
-            }}
-          >
-            {/* AI Screening Badge or Button */}
-            {screeningChecked &&
-              screening &&
-              screening.revisionNumber === selectedVersion && (
-                <ScreeningBadge screening={screening} />
-              )}
+          <div className="space-y-6">
+            <div className="lg:sticky lg:top-8 space-y-6">
+              {screeningChecked &&
+                screening &&
+                screening.revisionNumber === selectedVersion && (
+                  <ScreeningBadge screening={screening} />
+                )}
 
-            {screeningChecked &&
-              (!screening || screening.revisionNumber !== selectedVersion) &&
-              wallet &&
-              signedAccountId && (
-                <ScreeningButton
-                  topicId={id as string}
-                  title={proposal.title}
-                  content={versionContent || proposal.content}
-                  nearAccount={signedAccountId}
-                  wallet={wallet}
-                  revisionNumber={selectedVersion}
-                  onScreeningComplete={() =>
-                    fetchScreening(id as string, selectedVersion)
-                  }
-                />
-              )}
+              {screeningChecked &&
+                (!screening || screening.revisionNumber !== selectedVersion) &&
+                wallet &&
+                signedAccountId && (
+                  <ScreeningButton
+                    topicId={id as string}
+                    title={proposal.title}
+                    content={proposal.content}
+                    nearAccount={signedAccountId}
+                    wallet={wallet}
+                    revisionNumber={selectedVersion}
+                    onScreeningComplete={() =>
+                      fetchScreening(id as string, selectedVersion)
+                    }
+                  />
+                )}
 
-            {screeningChecked &&
-              (!screening || screening.revisionNumber !== selectedVersion) &&
-              (!wallet || !signedAccountId) && (
-                <div className="card">
-                  <p style={{ fontSize: "0.875rem", color: "#6b7280" }}>
-                    Connect your NEAR wallet to screen this proposal with AI
-                  </p>
-                </div>
-              )}
+              {screeningChecked &&
+                (!screening || screening.revisionNumber !== selectedVersion) &&
+                (!wallet || !signedAccountId) && (
+                  <Card>
+                    <CardContent className="pt-6">
+                      <p className="text-sm text-muted-foreground">
+                        Connect your NEAR wallet to screen this proposal with AI
+                      </p>
+                    </CardContent>
+                  </Card>
+                )}
 
-            {/* Chatbot Component */}
-            <ProposalChatbot
-              proposalTitle={proposal.title}
-              proposalContent={versionContent || proposal.content}
-              proposalId={id as string}
-              replies={proposal.replies || []}
-              proposalAuthor={proposal.username}
-            />
+              <ProposalChatbot
+                proposalTitle={proposal.title}
+                proposalContent={proposal.content}
+                proposalId={id as string}
+                replies={proposal.replies || []}
+                proposalAuthor={proposal.username}
+              />
+            </div>
           </div>
         </div>
       </div>

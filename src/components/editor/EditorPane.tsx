@@ -1,4 +1,11 @@
 import React from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AlertCircle, Check, X } from "lucide-react";
 
 export function EditorPane({
   title,
@@ -30,130 +37,65 @@ export function EditorPane({
   onRejectChanges?: () => void;
 }) {
   return (
-    <div>
+    <div className="space-y-6">
       {/* Title Input */}
-      <div style={{ marginBottom: "1.5rem" }}>
-        <label
-          style={{
-            display: "block",
-            fontSize: "0.875rem",
-            fontWeight: "600",
-            color: "#374151",
-            marginBottom: "0.5rem",
-          }}
-        >
-          Proposal Title
-        </label>
-        <input
-          type="text"
+      <div className="space-y-2">
+        <Label htmlFor="title">Proposal Title</Label>
+        <Input
+          id="title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           disabled={disabled}
           placeholder="Enter your proposal title…"
-          className="input"
-          style={{
-            fontSize: "1rem",
-            fontWeight: 600,
-          }}
+          className="text-base font-semibold"
         />
       </div>
 
-      {/* Diff Controls Banner - Show when there are pending changes */}
+      {/* Diff Controls Banner */}
       {hasPendingChanges && showDiffHighlights && (
-        <div
-          style={{
-            padding: "1rem",
-            background: "#fff7ed",
-            border: "2px solid #fb923c",
-            borderRadius: "8px",
-            marginBottom: "1rem",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <div
-            style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}
-          >
-            <div>
-              <div
-                style={{
-                  fontSize: "0.875rem",
-                  fontWeight: "600",
-                  color: "#9a3412",
-                  marginBottom: "0.125rem",
-                }}
-              >
-                AI Suggested Changes
+        <Alert className="bg-orange-50 border-orange-300">
+          <AlertCircle className="h-4 w-4 text-orange-600" />
+          <AlertDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-semibold text-orange-900 mb-1">
+                  AI Suggested Changes
+                </div>
+                <div className="text-xs text-orange-800">
+                  <span className="text-green-700">Green</span> = additions •{" "}
+                  <span className="text-red-700">Red</span> = removals
+                </div>
               </div>
-              <div style={{ fontSize: "0.75rem", color: "#92400e" }}>
-                <span style={{ color: "#166534" }}>Green</span> = additions •{" "}
-                <span style={{ color: "#991b1b" }}>Red</span> = removals
+              <div className="flex gap-2">
+                <Button
+                  onClick={onRejectChanges}
+                  variant="outline"
+                  size="sm"
+                  className="gap-1"
+                >
+                  <X className="h-3 w-3" />
+                  Reject
+                </Button>
+                <Button onClick={onAcceptChanges} size="sm" className="gap-1">
+                  <Check className="h-3 w-3" />
+                  Accept
+                </Button>
               </div>
             </div>
-          </div>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button
-              onClick={onRejectChanges}
-              className="btn btn-ghost"
-              style={{
-                fontSize: "0.875rem",
-                padding: "0.5rem 1rem",
-              }}
-            >
-              ✕ Reject
-            </button>
-            <button
-              onClick={onAcceptChanges}
-              className="btn btn-primary"
-              style={{
-                fontSize: "0.875rem",
-                padding: "0.5rem 1rem",
-                background: "#0072ce",
-              }}
-            >
-              ✓ Accept
-            </button>
-          </div>
-        </div>
+          </AlertDescription>
+        </Alert>
       )}
 
-      {/* View Toggle Buttons */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "0.75rem",
-        }}
-      >
-        <div className="segmented" role="tablist" aria-label="View mode">
-          <button
-            role="tab"
-            aria-selected={viewMode === "editor"}
-            className={`segmented-btn ${viewMode === "editor" ? "active" : ""}`}
-            onClick={() => onToggleView("editor")}
-          >
-            Editor
-          </button>
-          <button
-            role="tab"
-            aria-selected={viewMode === "preview"}
-            className={`segmented-btn ${
-              viewMode === "preview" ? "active" : ""
-            }`}
-            onClick={() => onToggleView("preview")}
-          >
-            Preview
-          </button>
-        </div>
+      {/* View Toggle */}
+      <div className="flex items-center justify-between">
+        <Tabs value={viewMode} onValueChange={(v) => onToggleView(v as any)}>
+          <TabsList>
+            <TabsTrigger value="editor">Editor</TabsTrigger>
+            <TabsTrigger value="preview">Preview</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
-        <kbd
-          style={{
-            fontSize: "0.7rem",
-            padding: "0.25rem 0.5rem",
-          }}
-        >
+        <kbd className="px-2 py-1 text-xs bg-muted border rounded">
           ⌘/Ctrl + E to toggle
         </kbd>
       </div>
@@ -162,46 +104,24 @@ export function EditorPane({
       {viewMode === "editor" && (
         <div>
           {showDiffHighlights && diffHtml ? (
-            /* Show diff in a read-only formatted view */
             <div
-              style={{
-                padding: "1rem",
-                border: "2px solid #e5e7eb",
-                borderRadius: "8px",
-                background: "#fafafa",
-                minHeight: "400px",
-                maxHeight: "640px",
-                overflowY: "auto",
-                fontFamily:
-                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                fontSize: "0.875rem",
-                lineHeight: "1.6",
-                whiteSpace: "pre-wrap",
-              }}
+              className="min-h-[400px] max-h-[640px] overflow-y-auto p-4 border-2 rounded-lg bg-muted font-mono text-sm leading-relaxed whitespace-pre-wrap"
               dangerouslySetInnerHTML={{ __html: diffHtml }}
             />
           ) : (
-            /* Normal editable textarea */
-            <textarea
+            <Textarea
               value={content}
               onChange={(e) => setContent(e.target.value)}
               disabled={disabled}
               placeholder="Write your proposal in Markdown…
 
 Include:
-• Objectives and goals
-• Detailed budget breakdown
-• Timeline with milestones
-• Measurable KPIs"
+- Objectives and goals
+- Detailed budget breakdown
+- Timeline with milestones
+- Measurable KPIs"
               rows={24}
-              className="textarea"
-              style={{
-                fontFamily:
-                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                fontSize: "0.875rem",
-                lineHeight: "1.6",
-                width: "100%",
-              }}
+              className="font-mono text-sm resize-none"
             />
           )}
         </div>
@@ -209,51 +129,22 @@ Include:
 
       {/* Preview View */}
       {viewMode === "preview" && (
-        <div
-          style={{
-            padding: "1.25rem",
-            border: "2px solid #e5e7eb",
-            borderRadius: "8px",
-            background: "#fafafa",
-            minHeight: "400px",
-            maxHeight: "640px",
-            overflowY: "auto",
-          }}
-        >
+        <div className="min-h-[400px] max-h-[640px] overflow-y-auto p-5 border-2 rounded-lg bg-muted">
           {title && (
-            <h1
-              style={{
-                fontSize: "1.5rem",
-                fontWeight: "700",
-                marginBottom: "1rem",
-                color: "#1a1a1a",
-              }}
-            >
-              {title}
-            </h1>
+            <h1 className="text-2xl font-bold mb-4 text-foreground">{title}</h1>
           )}
           {showDiffHighlights && diffHtml ? (
             <div
-              style={{
-                fontSize: "0.95rem",
-                lineHeight: "1.6",
-                color: "#374151",
-              }}
+              className="prose prose-sm max-w-none"
               dangerouslySetInnerHTML={{ __html: diffHtml }}
             />
           ) : content ? (
             <div
-              className="markdown-content"
+              className="prose prose-sm max-w-none"
               dangerouslySetInnerHTML={{ __html: renderedPreview }}
             />
           ) : (
-            <p
-              style={{
-                color: "#9ca3af",
-                fontSize: "0.875rem",
-                fontStyle: "italic",
-              }}
-            >
+            <p className="text-sm text-muted-foreground italic">
               Your markdown preview will appear here…
             </p>
           )}

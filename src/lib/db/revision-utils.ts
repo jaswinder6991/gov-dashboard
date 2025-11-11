@@ -11,6 +11,17 @@ import {
 } from "./queries";
 import type { NewScreeningResult } from "./schema";
 
+const INTERNAL_API_BASE_URL =
+  process.env.INTERNAL_BASE_URL ||
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined) ||
+  "http://localhost:3000";
+
+const buildApiUrl = (path: string) =>
+  path.startsWith("http")
+    ? path
+    : `${INTERNAL_API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+
 /**
  * Response type from /api/proposals/[id]/revisions
  */
@@ -41,14 +52,23 @@ export interface DiscourseRevision {
 /**
  * Get the current version number for a topic from Discourse
  */
-export async function getCurrentTopicVersion(topicId: string): Promise<number> {
-  const response = await fetch(`/api/proposals/${topicId}/revisions`);
+async function fetchTopicRevisions(
+  topicId: string
+): Promise<DiscourseRevisionResponse> {
+  const response = await fetch(buildApiUrl(`/api/proposals/${topicId}/revisions`));
 
   if (!response.ok) {
     throw new Error(`Failed to fetch revisions: ${response.status}`);
   }
 
-  const data: DiscourseRevisionResponse = await response.json();
+  return response.json();
+}
+
+/**
+ * Get the current version number for a topic from Discourse
+ */
+export async function getCurrentTopicVersion(topicId: string): Promise<number> {
+  const data = await fetchTopicRevisions(topicId);
   return data.current_version;
 }
 
@@ -95,22 +115,29 @@ export async function saveScreeningWithVersion(
   nearAccount: string,
   forceVersion?: number
 ): Promise<number> {
-  // Get current version from Discourse if not forced
-  const version = forceVersion ?? (await getCurrentTopicVersion(topicId));
+  let revisionsData: DiscourseRevisionResponse | null = null;
+  let version = forceVersion;
+
+  if (version === undefined) {
+    revisionsData = await fetchTopicRevisions(topicId);
+    version = revisionsData.current_version;
+  }
+
+  if (version === undefined) {
+    throw new Error("Unable to determine revision version for screening");
+  }
 
   // Fetch revision timestamp if available
   let revisionTimestamp: Date | undefined;
   try {
-    const revResponse = await fetch(`/api/proposals/${topicId}/revisions`);
-    if (revResponse.ok) {
-      const revData: DiscourseRevisionResponse = await revResponse.json();
-      const revision = revData.revisions.find((r) => r.version === version);
-      if (revision?.created_at) {
-        revisionTimestamp = new Date(revision.created_at);
-      }
+    if (!revisionsData) {
+      revisionsData = await fetchTopicRevisions(topicId);
+    }
+    const revision = revisionsData.revisions.find((r) => r.version === version);
+    if (revision?.created_at) {
+      revisionTimestamp = new Date(revision.created_at);
     }
   } catch (err) {
-    // If we can't get revision timestamp, continue without it
     console.warn("Could not fetch revision timestamp:", err);
   }
 

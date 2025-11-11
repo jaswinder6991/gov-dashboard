@@ -3,20 +3,21 @@
 import { useState } from "react";
 import { useNear } from "@/hooks/useNear";
 import type { Evaluation } from "@/types/evaluation";
-import { ProposalForm } from "@/components/ProposalForm";
-import { ScreeningResults } from "@/components/ScreeningResults";
-import { ConnectDiscourse } from "@/components/ConnectDiscourse";
-import { PublishButton } from "@/components/PublishButton";
+import { ProposalForm } from "@/components/proposal/ProposalForm";
+import { ScreeningResults } from "@/components/proposal/screening/ScreeningResults";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AlertCircle, CheckCircle, AlertTriangle } from "lucide-react";
 
-export default function NewProposal() {
-  const { signedAccountId, wallet, loading: walletLoading, signIn } = useNear();
-
+export default function NewProposalPage() {
+  const { signedAccountId } = useNear();
   const [title, setTitle] = useState("");
   const [proposal, setProposal] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<Evaluation | null>(null);
   const [error, setError] = useState("");
-  const [linkedAccount, setLinkedAccount] = useState<any>(null);
+  const [remainingEvaluations, setRemainingEvaluations] = useState<
+    number | null
+  >(null);
 
   const evaluateProposal = async () => {
     if (!title.trim() || !proposal.trim()) {
@@ -29,14 +30,30 @@ export default function NewProposal() {
     setResult(null);
 
     try {
-      const response = await fetch("/api/screen", {
+      const response = await fetch("/api/evaluateDraft", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, proposal }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title, content: proposal }),
       });
+
+      // Get rate limit info from headers
+      const remaining = response.headers.get("X-RateLimit-Remaining");
+      if (remaining) {
+        setRemainingEvaluations(parseInt(remaining));
+      }
 
       if (!response.ok) {
         const errorData = await response.json();
+
+        if (response.status === 429) {
+          const retryMinutes = Math.ceil((errorData.retryAfter || 900) / 60);
+          throw new Error(
+            `Rate limit exceeded. Please try again in ${retryMinutes} minutes or connect your NEAR wallet for unlimited evaluations.`
+          );
+        }
+
         throw new Error(
           errorData.error || `API request failed: ${response.status}`
         );
@@ -45,6 +62,7 @@ export default function NewProposal() {
       const data = await response.json();
       setResult(data.evaluation);
     } catch (err: any) {
+      console.error("Evaluation error:", err);
       setError(err.message || "Failed to evaluate proposal");
     } finally {
       setLoading(false);
@@ -52,17 +70,35 @@ export default function NewProposal() {
   };
 
   return (
-    <div className="page-wrapper">
-      <div className="container">
-        <div className="card">
-          <div className="screener-header text-center">
-            <h1 className="page-title">New Proposal</h1>
-            <p className="page-subtitle">
-              Use NEAR AI to privately check against established criteria, then
-              publish to the forum.
-            </p>
-          </div>
+    <div className="min-h-screen bg-background">
+      <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">
+        <div className="space-y-3 text-center">
+          <h1 className="text-3xl font-semibold">New Proposal</h1>
+          <p className="text-muted-foreground">
+            Use NEAR AI to privately check against established criteria, then
+            publish to the forum.
+          </p>
+        </div>
 
+        {/* Rate limit info for anonymous users */}
+        {!signedAccountId && remainingEvaluations !== null && (
+          <Alert>
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              You have <strong>{remainingEvaluations}</strong> free evaluation
+              {remainingEvaluations !== 1 ? "s" : ""} remaining. Connect your
+              NEAR wallet for unlimited evaluations.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {signedAccountId && (
+          <div className="rounded-lg border p-4 bg-green-50 text-green-900">
+            Connected as <strong>{signedAccountId}</strong>
+          </div>
+        )}
+
+        <div className="rounded-lg border p-6 bg-card">
           <ProposalForm
             title={title}
             proposal={proposal}
@@ -71,93 +107,38 @@ export default function NewProposal() {
             onSubmit={evaluateProposal}
             loading={loading}
           />
-
-          {error && (
-            <div className="alert alert-error">
-              <span className="alert-icon">⚠</span>
-              <p className="alert-text">{error}</p>
-            </div>
-          )}
-
-          {result && (
-            <>
-              <ScreeningResults evaluation={result} />
-
-              {!result.overallPass && (
-                <div
-                  className="alert alert-warning"
-                  style={{ marginTop: "2rem" }}
-                >
-                  <span className="alert-icon">ℹ️</span>
-                  <p className="alert-text">
-                    Your proposal didn't pass screening. Review the
-                    recommendations above, edit your proposal, and click "Screen
-                    Proposal" again when ready.
-                  </p>
-                </div>
-              )}
-
-              {result.overallPass && (
-                <>
-                  {/* Show wallet warning if not connected */}
-                  {!walletLoading && !signedAccountId && (
-                    <div
-                      className="alert alert-error"
-                      style={{ marginTop: "2rem" }}
-                    >
-                      <span className="alert-icon">⚠</span>
-                      <div>
-                        <p
-                          className="alert-text"
-                          style={{ marginBottom: "1rem" }}
-                        >
-                          Please connect your NEAR wallet to publish your
-                          proposal
-                        </p>
-                        <button onClick={signIn} className="btn btn-primary">
-                          Connect NEAR Wallet
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {signedAccountId && wallet && (
-                    <>
-                      {!linkedAccount && (
-                        <ConnectDiscourse
-                          signedAccountId={signedAccountId}
-                          wallet={wallet}
-                          onLinked={setLinkedAccount}
-                          onError={setError}
-                        />
-                      )}
-
-                      {linkedAccount && (
-                        <PublishButton
-                          wallet={wallet}
-                          title={title}
-                          content={proposal}
-                          linkedAccount={linkedAccount}
-                          evaluation={result}
-                          onPublished={() => {}}
-                          onError={setError}
-                        />
-                      )}
-                    </>
-                  )}
-                </>
-              )}
-            </>
-          )}
         </div>
 
-        <footer className="footer">
-          <p className="footer-text">
-            AI screening supports both proposal authors and community reviewers.
-            Results are advisory and independent of official governance
-            processes.
-          </p>
-        </footer>
+        {error && (
+          <div className="rounded-lg border border-destructive px-4 py-3 text-destructive bg-destructive/10">
+            {error}
+          </div>
+        )}
+
+        {result && (
+          <>
+            <div className="rounded-lg border p-6 bg-card">
+              <ScreeningResults evaluation={result} />
+            </div>
+
+            {result.overallPass ? (
+              <Alert className="border-green-500 bg-green-50 text-green-900">
+                <CheckCircle className="h-4 w-4" />
+                <AlertDescription>
+                  Your proposal is ready to publish to Discourse.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Alert className="border-yellow-500 bg-yellow-50 text-yellow-900">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  Your proposal didn't pass screening. Review the feedback
+                  above, make edits, and run the screen again.
+                </AlertDescription>
+              </Alert>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

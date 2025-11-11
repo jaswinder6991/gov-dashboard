@@ -1,5 +1,5 @@
 {
-  "id": "bdecc64b-41c1-4de7-85ca-3087fae25857",
+  "id": "e2b0315e-35ec-4e95-9d7b-bbab7d4992a0",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -11,7 +11,13 @@
         "topic_id": {
           "name": "topic_id",
           "type": "varchar(255)",
-          "primaryKey": true,
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision_number": {
+          "name": "revision_number",
+          "type": "integer",
+          "primaryKey": false,
           "notNull": true
         },
         "evaluation": {
@@ -38,9 +44,42 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "revision_timestamp": {
+          "name": "revision_timestamp",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "quality_score": {
+          "name": "quality_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attention_score": {
+          "name": "attention_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
+        "idx_screening_results_topic_id": {
+          "name": "idx_screening_results_topic_id",
+          "columns": [
+            {
+              "expression": "topic_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "idx_screening_results_near_account": {
           "name": "idx_screening_results_near_account",
           "columns": [
@@ -75,9 +114,90 @@
           "name": "idx_screening_results_overall_pass",
           "columns": [
             {
-              "expression": "evaluation",
+              "expression": "((evaluation->>'overallPass')::boolean)",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_screening_results_topic_revision": {
+          "name": "idx_screening_results_topic_revision",
+          "columns": [
+            {
+              "expression": "topic_id",
               "isExpression": false,
               "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "revision_number",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_screening_results_quality_score": {
+          "name": "idx_screening_results_quality_score",
+          "columns": [
+            {
+              "expression": "quality_score",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_screening_results_attention_score": {
+          "name": "idx_screening_results_attention_score",
+          "columns": [
+            {
+              "expression": "attention_score",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_screening_results_relevant": {
+          "name": "idx_screening_results_relevant",
+          "columns": [
+            {
+              "expression": "(evaluation->'relevant'->>'score')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_screening_results_material": {
+          "name": "idx_screening_results_material",
+          "columns": [
+            {
+              "expression": "(evaluation->'material'->>'score')",
+              "asc": true,
+              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -88,7 +208,15 @@
         }
       },
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
+      "compositePrimaryKeys": {
+        "screening_results_topic_id_revision_number_pk": {
+          "name": "screening_results_topic_id_revision_number_pk",
+          "columns": [
+            "topic_id",
+            "revision_number"
+          ]
+        }
+      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},

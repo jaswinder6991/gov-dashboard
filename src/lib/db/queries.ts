@@ -4,7 +4,7 @@ import {
   type NewScreeningResult,
   type ScreeningResult,
 } from "./schema";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, gte, lte, sql } from "drizzle-orm";
 
 /**
  * Get screening result by topic ID and revision number
@@ -57,14 +57,21 @@ export async function getScreeningsByTopic(
 }
 
 /**
- * Save screening result
- * The database will reject duplicates via composite primary key constraint.
- * Caller should catch error code 23505 and handle as 409 Conflict.
+ * Save screening result with computed scores
  */
 export async function saveScreeningResult(
   data: NewScreeningResult
 ): Promise<void> {
-  await db.insert(screeningResults).values(data);
+  // Extract quality and attention scores from evaluation
+  const evaluation = data.evaluation as any;
+  const qualityScore = evaluation.qualityScore ?? null;
+  const attentionScore = evaluation.attentionScore ?? null;
+
+  await db.insert(screeningResults).values({
+    ...data,
+    qualityScore,
+    attentionScore,
+  });
 }
 
 /**
@@ -85,25 +92,49 @@ export async function getScreeningsByAccount(
   }
 
   // Get latest revision for each topic
-  // Using a subquery to get max revision per topic
   const allResults = await db
     .select()
     .from(screeningResults)
     .where(eq(screeningResults.nearAccount, nearAccount))
     .orderBy(desc(screeningResults.timestamp));
 
-  // Filter to keep only the latest revision per topic
-  const latestByTopic = new Map<string, ScreeningResult>();
-  for (const result of allResults) {
-    const existing = latestByTopic.get(result.topicId);
-    if (!existing || result.revisionNumber > existing.revisionNumber) {
-      latestByTopic.set(result.topicId, result);
-    }
-  }
+  const ranked = db
+    .select({
+      topicId: screeningResults.topicId,
+      revisionNumber: screeningResults.revisionNumber,
+      evaluation: screeningResults.evaluation,
+      title: screeningResults.title,
+      nearAccount: screeningResults.nearAccount,
+      timestamp: screeningResults.timestamp,
+      revisionTimestamp: screeningResults.revisionTimestamp,
+      qualityScore: screeningResults.qualityScore,
+      attentionScore: screeningResults.attentionScore,
+      rowNumber: sql<number>`
+        row_number() over (
+          partition by ${screeningResults.topicId}
+          order by ${screeningResults.revisionNumber} desc
+        )
+      `.as("rowNumber"),
+    })
+    .from(screeningResults)
+    .where(eq(screeningResults.nearAccount, nearAccount))
+    .as("ranked");
 
-  return Array.from(latestByTopic.values()).sort(
-    (a, b) => b.timestamp.getTime() - a.timestamp.getTime()
-  );
+  return db
+    .select({
+      topicId: ranked.topicId,
+      revisionNumber: ranked.revisionNumber,
+      evaluation: ranked.evaluation,
+      title: ranked.title,
+      nearAccount: ranked.nearAccount,
+      timestamp: ranked.timestamp,
+      revisionTimestamp: ranked.revisionTimestamp,
+      qualityScore: ranked.qualityScore,
+      attentionScore: ranked.attentionScore,
+    })
+    .from(ranked)
+    .where(eq(ranked.rowNumber, 1))
+    .orderBy(desc(ranked.timestamp));
 }
 
 /**
@@ -112,24 +143,175 @@ export async function getScreeningsByAccount(
 export async function getRecentScreenings(
   limit = 10
 ): Promise<ScreeningResult[]> {
-  const allResults = await db
+  const ranked = db
+    .select({
+      topicId: screeningResults.topicId,
+      revisionNumber: screeningResults.revisionNumber,
+      evaluation: screeningResults.evaluation,
+      title: screeningResults.title,
+      nearAccount: screeningResults.nearAccount,
+      timestamp: screeningResults.timestamp,
+      revisionTimestamp: screeningResults.revisionTimestamp,
+      qualityScore: screeningResults.qualityScore,
+      attentionScore: screeningResults.attentionScore,
+      rowNumber: sql<number>`
+        row_number() over (
+          partition by ${screeningResults.topicId}
+          order by ${screeningResults.revisionNumber} desc
+        )
+      `.as("rowNumber"),
+    })
+    .from(screeningResults)
+    .as("ranked");
+
+  return db
+    .select({
+      topicId: ranked.topicId,
+      revisionNumber: ranked.revisionNumber,
+      evaluation: ranked.evaluation,
+      title: ranked.title,
+      nearAccount: ranked.nearAccount,
+      timestamp: ranked.timestamp,
+      revisionTimestamp: ranked.revisionTimestamp,
+      qualityScore: ranked.qualityScore,
+      attentionScore: ranked.attentionScore,
+    })
+    .from(ranked)
+    .where(eq(ranked.rowNumber, 1))
+    .orderBy(desc(ranked.timestamp))
+    .limit(limit);
+}
+
+/**
+ * NEW: Get screenings filtered by quality score
+ */
+export async function getScreeningsByQuality(
+  minScore: number,
+  maxScore: number = 1.0,
+  limit = 20
+): Promise<ScreeningResult[]> {
+  return db
     .select()
     .from(screeningResults)
+    .where(
+      and(
+        gte(screeningResults.qualityScore, minScore),
+        lte(screeningResults.qualityScore, maxScore)
+      )
+    )
     .orderBy(desc(screeningResults.timestamp))
-    .limit(limit * 3); // Fetch more to account for multiple revisions
+    .limit(limit);
+}
 
-  // Filter to keep only the latest revision per topic
-  const latestByTopic = new Map<string, ScreeningResult>();
-  for (const result of allResults) {
-    const existing = latestByTopic.get(result.topicId);
-    if (!existing || result.revisionNumber > existing.revisionNumber) {
-      latestByTopic.set(result.topicId, result);
-    }
-  }
+/**
+ * NEW: Get screenings filtered by attention score
+ */
+export async function getScreeningsByAttention(
+  minScore: number,
+  maxScore: number = 1.0,
+  limit = 20
+): Promise<ScreeningResult[]> {
+  return db
+    .select()
+    .from(screeningResults)
+    .where(
+      and(
+        gte(screeningResults.attentionScore, minScore),
+        lte(screeningResults.attentionScore, maxScore)
+      )
+    )
+    .orderBy(desc(screeningResults.timestamp))
+    .limit(limit);
+}
 
-  return Array.from(latestByTopic.values())
-    .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
-    .slice(0, limit);
+/**
+ * NEW: Get high-quality, high-attention proposals
+ */
+export async function getTopProposals(limit = 10): Promise<ScreeningResult[]> {
+  return db
+    .select()
+    .from(screeningResults)
+    .where(
+      and(
+        gte(screeningResults.qualityScore, 0.8),
+        gte(screeningResults.attentionScore, 0.75)
+      )
+    )
+    .orderBy(
+      desc(screeningResults.qualityScore),
+      desc(screeningResults.attentionScore),
+      desc(screeningResults.timestamp)
+    )
+    .limit(limit);
+}
+
+/**
+ * NEW: Get screenings by relevance score
+ */
+export async function getScreeningsByRelevance(
+  relevance: "high" | "medium" | "low",
+  limit = 20
+): Promise<ScreeningResult[]> {
+  return db
+    .select()
+    .from(screeningResults)
+    .where(
+      sql`(${screeningResults.evaluation}->'relevant'->>'score') = ${relevance}`
+    )
+    .orderBy(desc(screeningResults.timestamp))
+    .limit(limit);
+}
+
+/**
+ * NEW: Get screenings by materiality score
+ */
+export async function getScreeningsByMateriality(
+  material: "high" | "medium" | "low",
+  limit = 20
+): Promise<ScreeningResult[]> {
+  return db
+    .select()
+    .from(screeningResults)
+    .where(
+      sql`(${screeningResults.evaluation}->'material'->>'score') = ${material}`
+    )
+    .orderBy(desc(screeningResults.timestamp))
+    .limit(limit);
+}
+
+/**
+ * NEW: Get statistics for screenings
+ */
+export async function getScreeningStats(): Promise<{
+  total: number;
+  passed: number;
+  failed: number;
+  avgQualityScore: number;
+  avgAttentionScore: number;
+}> {
+  const [row] = await db
+    .select({
+      total: sql<number>`COUNT(*)`,
+      passed: sql<number>`
+        COUNT(*) FILTER (
+          WHERE (evaluation->>'overallPass')::boolean = true
+        )
+      `,
+      avgQualityScore: sql<number>`AVG(${screeningResults.qualityScore})`,
+      avgAttentionScore: sql<number>`AVG(${screeningResults.attentionScore})`,
+    })
+    .from(screeningResults);
+
+  const total = Number(row?.total ?? 0);
+  const passed = Number(row?.passed ?? 0);
+
+  return {
+    total,
+    passed,
+    failed: Math.max(total - passed, 0),
+    avgQualityScore: Number(row?.avgQualityScore ?? 0),
+    avgAttentionScore: Number(row?.avgAttentionScore ?? 0),
+  };
 }
 
 /**

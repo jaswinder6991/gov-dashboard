@@ -1,28 +1,27 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { db } from "@/lib/db";
-import { buildScreeningPrompt } from "@/lib/screeningPrompt";
 import { screeningResults } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import type { Evaluation } from "@/types/evaluation";
 import { getCurrentTopicVersion } from "@/lib/db/revision-utils";
+import {
+  sanitizeProposalInput,
+  verifyNearAuth,
+  requestEvaluation,
+  respondWithScreeningError,
+} from "@/lib/server/screening";
 
 /**
  * POST /api/saveAnalysis/[topicId]
  *
- * Screens a proposal and saves the result (pass or fail) to the database.
- * Now supports screening specific revisions of proposals.
+ * Screens a proposal and saves the result to the database.
  *
- * Used for:
- * 1. Saving screening after publishing to Discourse (from PublishButton)
- * 2. Retroactive evaluation of existing proposals (from ScreenProposalButton)
- * 3. Screening specific revisions (from VersionHistory)
- *
- * Security:
- * - Requires NEP-413 auth token
- * - Re-screens content server-side (doesn't trust client evaluation)
+ * Considerations:
+ * - Requires NEP-413 auth token via near-sign-verify
  * - Prevents duplicate screenings per (topicId, revisionNumber) via composite primary key
  * - Always saves results for transparency (pass or fail)
  */
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -35,12 +34,10 @@ export default async function handler(
   const topicIdParam = req.query.topicId;
   const topicId = Array.isArray(topicIdParam) ? topicIdParam[0] : topicIdParam;
 
-  const { title, content, evaluatorAccount, revisionNumber } = req.body as {
+  const { title, content, revisionNumber } = req.body as {
     title?: string;
     content?: string;
-    evaluatorAccount?: string; // Optional - if provided, must match signer
     revisionNumber?: number; // Optional - specific revision to screen
-    authToken?: string; // Optional fallback if not using Authorization header
   };
 
   // Validate required inputs
@@ -65,161 +62,105 @@ export default async function handler(
     });
   }
 
-  // Content length limits
-  const MAX_TITLE_LENGTH = 500;
-  const MAX_CONTENT_LENGTH = 20000; // ~20KB
-
-  if (title.length > MAX_TITLE_LENGTH) {
-    return res.status(400).json({
-      error: `Title too long (max ${MAX_TITLE_LENGTH} characters)`,
-    });
+  let sanitizedTitle: string;
+  let sanitizedContent: string;
+  try {
+    const sanitized = sanitizeProposalInput(title, content);
+    sanitizedTitle = sanitized.title;
+    sanitizedContent = sanitized.content;
+  } catch (error) {
+    return respondWithScreeningError(res, error);
   }
 
-  if (content.length > MAX_CONTENT_LENGTH) {
-    return res.status(400).json({
-      error: `Content too long (max ${MAX_CONTENT_LENGTH} characters)`,
-    });
-  }
-
-  // Basic input sanitization
-  const sanitize = (text: string) => {
-    // Remove control characters
-    return text.replace(/[\x00-\x1F\x7F]/g, "");
-  };
-
-  const sanitizedTitle = sanitize(title.trim());
-  const sanitizedContent = sanitize(content.trim());
-
-  // Extract NEP-413 auth token from Authorization header or body
   const authHeader = req.headers.authorization;
-  const authToken =
-    (authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined) ||
-    (typeof (req.body as any).authToken === "string"
-      ? (req.body as any).authToken
-      : undefined);
+  let verificationResult;
+  try {
+    ({ result: verificationResult } = await verifyNearAuth(authHeader, {
+      validateMessage: (message: string) => {
+        const expectedMessage = `Screen proposal ${topicId}`;
+        if (message !== expectedMessage) {
+          console.error(
+            `[Save Analysis] Message mismatch. Expected "${expectedMessage}", received "${message}"`
+          );
+          return false;
+        }
+        return true;
+      },
+    }));
+  } catch (error) {
+    return respondWithScreeningError(
+      res,
+      error,
+      "Authorization header with Bearer token is required"
+    );
+  }
 
-  if (!authToken) {
-    return res.status(401).json({
-      error: "Missing auth token",
-      message: "Send NEP-413 authToken in Authorization: Bearer <token>",
+  const signerAccountId = verificationResult.accountId;
+
+  // Determine which revision to screen
+  let versionToScreen: number;
+
+  if (revisionNumber !== undefined) {
+    // Specific revision requested
+    versionToScreen = revisionNumber;
+  } else {
+    // No revision specified - get current version from Discourse
+    try {
+      versionToScreen = await getCurrentTopicVersion(topicId);
+    } catch (error) {
+      console.warn(
+        `[Save Analysis] Could not fetch current version from Discourse for topic ${topicId}, defaulting to 1`
+      );
+      versionToScreen = 1;
+    }
+  }
+
+  // Check for existing screening for this specific revision
+  const existing = await db
+    .select()
+    .from(screeningResults)
+    .where(
+      and(
+        eq(screeningResults.topicId, topicId),
+        eq(screeningResults.revisionNumber, versionToScreen)
+      )
+    )
+    .limit(1);
+
+  if (existing?.length) {
+    return res.status(409).json({
+      error: "Already evaluated",
+      message: `Revision ${versionToScreen} of this proposal has already been evaluated by ${existing[0].nearAccount}`,
+      version: versionToScreen,
+      existingEvaluation: existing[0].evaluation,
     });
   }
 
   try {
-    // Verify NEP-413 token
-    const { verify } = await import("near-sign-verify");
-
-    const result = await verify(authToken, {
-      expectedRecipient: "social.near",
-      nonceMaxAge: 5 * 60 * 1000, // 5 minutes
-    });
-
-    const signerAccountId = result.accountId;
-
-    // If evaluatorAccount provided, ensure it matches the signer
-    if (
-      evaluatorAccount?.trim() &&
-      evaluatorAccount.trim() !== signerAccountId
-    ) {
-      return res.status(401).json({
-        error: "Account mismatch",
-        message: "evaluatorAccount does not match the signed token's account",
-      });
-    }
-
-    // Determine which revision to screen
-    let versionToScreen: number;
-
-    if (revisionNumber !== undefined) {
-      // Specific revision requested
-      versionToScreen = revisionNumber;
-    } else {
-      // No revision specified - get current version from Discourse
-      try {
-        versionToScreen = await getCurrentTopicVersion(topicId);
-      } catch (error) {
-        console.warn(
-          "Could not fetch current version from Discourse, defaulting to 1"
-        );
-        versionToScreen = 1;
-      }
-    }
-
-    // Check for existing screening for this specific revision
-    const existing = await db
-      .select()
-      .from(screeningResults)
-      .where(
-        and(
-          eq(screeningResults.topicId, topicId),
-          eq(screeningResults.revisionNumber, versionToScreen)
-        )
-      )
-      .limit(1);
-
-    if (existing?.length) {
-      return res.status(409).json({
-        error: "Already evaluated",
-        message: `Revision ${versionToScreen} of this proposal has already been evaluated`,
-        version: versionToScreen,
-      });
-    }
-
-    // Get AI API key
-    const apiKey = process.env.NEAR_AI_CLOUD_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({ error: "AI API not configured" });
-    }
-
-    // Build screening prompt using reusable utility
-    const prompt = buildScreeningPrompt(sanitizedTitle, sanitizedContent);
-
-    // Call AI for screening evaluation
-    const evaluateResponse = await fetch(
-      "https://cloud-api.near.ai/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "deepseek-ai/DeepSeek-V3.1",
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.3,
-        }),
-      }
+    const evaluation: Evaluation = await requestEvaluation(
+      sanitizedTitle,
+      sanitizedContent
     );
 
-    if (!evaluateResponse.ok) {
-      throw new Error(`AI evaluation failed: ${evaluateResponse.status}`);
-    }
+    // Extract computed scores from evaluation
+    const qualityScore = evaluation.qualityScore;
+    const attentionScore = evaluation.attentionScore;
 
-    const data = await evaluateResponse.json();
-    const aiContent: string = data.choices[0]?.message?.content ?? "";
-
-    // Extract JSON from AI response
-    const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error("Invalid AI response format");
-    }
-
-    const evaluation: Evaluation = JSON.parse(jsonMatch[0]);
-
-    // Validate evaluation structure
-    if (evaluation.overallPass === undefined) {
-      throw new Error("Invalid evaluation structure");
-    }
-
-    // Save to database with revision number
+    // Save to database with revision number and computed scores
     try {
       await db.insert(screeningResults).values({
         topicId,
         revisionNumber: versionToScreen,
         evaluation,
         title: sanitizedTitle,
-        nearAccount: signerAccountId,
+        nearAccount: signerAccountId, // Always from verified token
+        qualityScore, // NEW: Save computed quality score
+        attentionScore, // NEW: Save computed attention score
       });
+
+      console.log(
+        `[Save Analysis] ✓ Saved screening for topic ${topicId} revision ${versionToScreen} by ${signerAccountId} (Q: ${qualityScore}, A: ${attentionScore})`
+      );
     } catch (dbError: any) {
       // Handle duplicate key error (composite primary key violation)
       // Error code 23505 = PostgreSQL unique_violation
@@ -242,17 +183,15 @@ export default async function handler(
       saved: true,
       passed: evaluation.overallPass,
       evaluation,
+      qualityScore,
+      attentionScore,
       version: versionToScreen,
+      evaluatedBy: signerAccountId,
       message: evaluation.overallPass
         ? `Evaluation passed and saved for revision ${versionToScreen}`
         : `Evaluation failed but saved for revision ${versionToScreen}`,
     });
-  } catch (error: any) {
-    console.error("Evaluation error:", error);
-    return res.status(500).json({
-      error: "Evaluation failed",
-      details:
-        process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
+  } catch (error) {
+    return respondWithScreeningError(res, error);
   }
 }

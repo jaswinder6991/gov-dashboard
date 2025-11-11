@@ -1,5 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { discussionCache, CacheKeys } from "../../../../../utils/cache-utils";
+import {
+  discussionCache,
+  CacheKeys,
+} from "../../../../../lib/utils/cache-utils";
+import { buildDiscussionSummaryPrompt } from "@/lib/prompts/summarizeDiscussion";
 
 // TypeScript type definitions for Discourse API
 interface ActionSummary {
@@ -70,21 +74,14 @@ export default async function handler(
     }
 
     // ===================================================================
-    // FETCH FROM DISCOURSE
+    // FETCH FROM DISCOURSE (NO AUTH)
     // ===================================================================
-    const DISCOURSE_URL =
-      process.env.DISCOURSE_URL || "https://discuss.near.vote";
-    const DISCOURSE_API_KEY = process.env.DISCOURSE_API_KEY;
-    const DISCOURSE_API_USERNAME = process.env.DISCOURSE_API_USERNAME;
+    const DISCOURSE_URL = process.env.DISCOURSE_URL || "https://gov.near.org";
 
     const headers: HeadersInit = {
       "Content-Type": "application/json",
+      Accept: "application/json",
     };
-
-    if (DISCOURSE_API_KEY && DISCOURSE_API_USERNAME) {
-      headers["Api-Key"] = DISCOURSE_API_KEY;
-      headers["Api-Username"] = DISCOURSE_API_USERNAME;
-    }
 
     const topicResponse = await fetch(`${DISCOURSE_URL}/t/${id}.json`, {
       headers,
@@ -96,9 +93,14 @@ export default async function handler(
 
     const topicData = await topicResponse.json();
 
-    // Get all posts except the first one (replies only)
+    // Get all posts - KEEP THE FIRST ONE (original proposal)
     const posts = topicData.post_stream?.posts || [];
-    const replies: DiscoursePost[] = posts.slice(1); // Skip the original proposal
+    const originalPost: DiscoursePost | undefined = posts[0];
+    const replies: DiscoursePost[] = posts.slice(1); // Get replies separately
+
+    if (!originalPost) {
+      return res.status(404).json({ error: "Original post not found" });
+    }
 
     if (replies.length === 0) {
       return res.status(200).json({
@@ -136,7 +138,7 @@ export default async function handler(
       0
     );
     const avgLikes =
-      replies.length > 0 ? (totalLikes / replies.length).toFixed(1) : 0;
+      replies.length > 0 ? (totalLikes / replies.length).toFixed(1) : "0";
     const maxLikes = Math.max(
       ...repliesWithEngagement.map((r) => r.likeCount),
       0
@@ -145,8 +147,32 @@ export default async function handler(
       (r) => r.likeCount > 5
     ).length;
 
+    // ===================================================================
+    // BUILD DISCUSSION WITH ORIGINAL POST CONTEXT
+    // ===================================================================
+    const originalContent = stripHtml(originalPost.cooked);
+
+    // Truncate original post if very long (keep first 2000 chars)
+    const MAX_ORIGINAL_LENGTH = 2000;
+    const truncatedOriginal =
+      originalContent.length > MAX_ORIGINAL_LENGTH
+        ? originalContent.substring(0, MAX_ORIGINAL_LENGTH) +
+          "\n\n[... original post truncated for brevity ...]"
+        : originalContent;
+
+    // Build the original post context
+    const originalPostContext = `**ORIGINAL PROPOSAL (Post #1) by @${originalPost.username}:**
+
+${truncatedOriginal}
+
+---
+
+**COMMUNITY REPLIES:**
+
+`;
+
     // Build discussion text in CHRONOLOGICAL order with engagement and threading info
-    const discussionText = repliesWithEngagement
+    const repliesText = repliesWithEngagement
       .slice(0, 100) // Take first 100 replies (chronological)
       .map((post: ReplyWithEngagement, index: number) => {
         const cleanContent = stripHtml(post.cooked);
@@ -168,76 +194,35 @@ export default async function handler(
       })
       .join("\n\n---\n\n");
 
-    // Truncate if needed
-    const MAX_LENGTH = 12000;
+    // Combine original post + replies
+    const fullDiscussion = originalPostContext + repliesText;
+
+    // Truncate if needed (now accounting for original post length)
+    const MAX_LENGTH = 14000; // Increased slightly to account for original post
     const truncatedDiscussion =
-      discussionText.length > MAX_LENGTH
-        ? discussionText.substring(0, MAX_LENGTH) +
+      fullDiscussion.length > MAX_LENGTH
+        ? fullDiscussion.substring(0, MAX_LENGTH) +
           "\n\n[... additional replies truncated ...]"
-        : discussionText;
+        : fullDiscussion;
 
     // ===================================================================
-    // GENERATE AI SUMMARY
+    // GENERATE AI SUMMARY USING PROMPT BUILDER
     // ===================================================================
     const apiKey = process.env.NEAR_AI_CLOUD_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ error: "AI API not configured" });
     }
 
-    const prompt = `You are summarizing community discussion on a NEAR governance proposal. Analyze the replies and provide insights.
-
-**Topic:** ${topicData.title}
-**Total Replies:** ${replies.length}
-
-**Engagement Statistics:**
-- Total Likes: ${totalLikes}
-- Average Likes per Reply: ${avgLikes}
-- Highest Liked Reply: ${maxLikes} likes
-- Highly Engaged Replies (6+ likes): ${highlyEngagedReplies}
-
-IMPORTANT CONTEXT:
-1. Replies are in CHRONOLOGICAL ORDER to show how the conversation evolved
-2. Each reply shows: [X likes] for engagement level
-3. CRITICAL: Each reply may show [Replying to Post #X by @username] - this indicates the reply is responding to a SPECIFIC earlier post, not necessarily the previous one chronologically or the original proposal
-4. Pay attention to reply chains - when multiple people reply to the same post, it indicates an important sub-discussion
-
-Use like counts to identify:
-- Community-validated points (higher likes = stronger agreement)
-- Influential voices (consistently high engagement)
-- Controversial points (discussion without many likes)
-- Emerging consensus (likes increasing over time)
-
-Use reply threading to understand:
-- Which specific points sparked debate
-- How sub-discussions evolved
-- Which concerns were addressed (and by whom)
-- Conversation branches and their resolution
-
-Consider timing, validation (likes), AND reply structure when analyzing the discussion.
-
-**Discussion:**
-${truncatedDiscussion}
-
-Provide a comprehensive discussion summary (300-500 words) covering:
-
-**Overall Sentiment:** [General community reaction - supportive/opposed/mixed/neutral]
-
-**Key Themes:**
-- [Main points of agreement or support - note which have strong community validation]
-- [Common concerns or objections raised]
-- [Suggested modifications or alternatives]
-
-**Discussion Evolution:** [How the conversation developed - note important reply chains where multiple people engaged on specific points]
-
-**Most Engaged Points:** [Highlight replies with significantly higher likes than average AND/OR those that sparked multiple direct replies]
-
-**Notable Voices:** [Mention particularly engaged or insightful contributors]
-
-**Community Consensus:** [Areas of agreement or persistent disagreement - use both engagement levels and reply patterns to gauge consensus]
-
-**Important Considerations:** [Critical issues raised that warrant attention - especially those that sparked sub-discussions even if not highly liked]
-
-Focus on substance over noise. Weight your analysis based on timing (when said), validation (likes received), AND conversation structure (what sparked replies).`;
+    // Use the prompt builder function
+    const prompt = buildDiscussionSummaryPrompt(
+      { title: topicData.title },
+      replies,
+      totalLikes,
+      parseFloat(avgLikes),
+      maxLikes,
+      highlyEngagedReplies,
+      truncatedDiscussion
+    );
 
     const summaryResponse = await fetch(
       "https://cloud-api.near.ai/v1/chat/completions",
@@ -276,13 +261,12 @@ Focus on substance over noise. Weight your analysis based on timing (when said),
       topicId: id,
       title: topicData.title,
       replyCount: replies.length,
-      truncated: discussionText.length > MAX_LENGTH,
+      truncated: fullDiscussion.length > MAX_LENGTH,
       engagement: {
         totalLikes,
         totalReplies: replies.length,
         participantCount: topicData.participant_count,
-        avgLikesPerReply:
-          replies.length > 0 ? (totalLikes / replies.length).toFixed(1) : 0,
+        avgLikesPerReply: avgLikes,
       },
       generatedAt: Date.now(), // For cache age tracking
       cached: false,
@@ -295,7 +279,7 @@ Focus on substance over noise. Weight your analysis based on timing (when said),
 
     return res.status(200).json(response);
   } catch (error: any) {
-    console.error("Discussion summary error:", error);
+    console.error("[Discussion Summary] Error:", error);
     return res.status(500).json({
       error: "Failed to generate discussion summary",
       details:

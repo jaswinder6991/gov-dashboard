@@ -1,50 +1,34 @@
 import React from "react";
 import type { Evaluation } from "@/types/evaluation";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { CheckCircle2, AlertTriangle } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export function EvaluationSummary({ evaluation }: { evaluation: Evaluation }) {
+  const isPassing = evaluation.overallPass;
+
   return (
-    <div
-      style={{
-        padding: "0.875rem",
-        background: evaluation.overallPass ? "#f0fdf4" : "#fffbeb",
-        border: evaluation.overallPass
-          ? "1px solid #86efac"
-          : "1px solid #fcd34d",
-        borderRadius: "8px",
-        marginTop: "0.75rem",
-      }}
+    <Alert
+      className={cn(
+        "mt-3",
+        isPassing
+          ? "bg-green-50 border-green-200 text-green-900"
+          : "bg-yellow-50 border-yellow-200 text-yellow-900"
+      )}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "0.5rem",
-          marginBottom: "0.5rem",
-        }}
-      >
-        <span style={{ fontSize: "1.25rem" }}>
-          {evaluation.overallPass ? "✓" : "⚠"}
-        </span>
-        <span
-          style={{
-            fontSize: "0.875rem",
-            fontWeight: "700",
-            color: evaluation.overallPass ? "#065f46" : "#92400e",
-          }}
-        >
-          {evaluation.overallPass ? "Passes Screening" : "Needs Work"}
+      <div className="flex items-center gap-2 mb-2">
+        {isPassing ? (
+          <CheckCircle2 className="h-5 w-5 text-green-600" />
+        ) : (
+          <AlertTriangle className="h-5 w-5 text-yellow-600" />
+        )}
+        <span className="text-sm font-bold">
+          {isPassing ? "Passes Screening" : "Needs Work"}
         </span>
       </div>
-      <p
-        style={{
-          fontSize: "0.8rem",
-          color: "#374151",
-          lineHeight: "1.5",
-          margin: 0,
-        }}
-      >
+      <AlertDescription className="text-xs leading-relaxed">
         {evaluation.summary}
-      </p>
-    </div>
+      </AlertDescription>
+    </Alert>
   );
 }

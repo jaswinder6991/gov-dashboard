@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import ProposalCard from "@/components/ProposalCard";
+import ProposalCard from "@/components/proposal/ProposalCard";
+import { Card, CardContent } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
+import { AlertCircle } from "lucide-react";
 
 interface Post {
   id: number;
@@ -43,62 +46,63 @@ export default function Home() {
   };
 
   return (
-    <div className="page-wrapper">
-      <div className="container">
-        {/* Header with New Proposal button */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: "2rem",
-          }}
-        >
-          <div>
-            <h1 className="page-title" style={{ margin: 0 }}>
-              Proposals
-            </h1>
-          </div>
-          <Link
-            href="/proposals/new"
-            className="btn btn-primary"
-            style={{
-              background: "#00ec97",
-              color: "#ffffff",
-              fontWeight: "600",
-            }}
-          >
-            + New Proposal
-          </Link>
+    <div className="min-h-screen bg-background">
+      <div className="max-w-6xl mx-auto p-8">
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-4xl font-bold mb-2">Proposals</h1>
+          <p className="text-muted-foreground">
+            Browse and analyze NEAR governance proposals
+          </p>
         </div>
 
+        {/* Loading State */}
         {loading && (
-          <div className="card">
-            <div style={{ textAlign: "center", padding: "2rem" }}>
-              <p>Loading proposals...</p>
-            </div>
+          <div className="space-y-4">
+            {[1, 2, 3].map((i) => (
+              <Card key={i}>
+                <CardContent className="pt-6">
+                  <div className="space-y-3">
+                    <Skeleton className="h-6 w-3/4" />
+                    <Skeleton className="h-4 w-full" />
+                    <Skeleton className="h-4 w-2/3" />
+                    <div className="flex gap-4 pt-2">
+                      <Skeleton className="h-3 w-20" />
+                      <Skeleton className="h-3 w-20" />
+                      <Skeleton className="h-3 w-20" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
         )}
 
+        {/* Error State */}
         {error && (
-          <div className="alert alert-error">
-            <span className="alert-icon">⚠</span>
-            <p className="alert-text">{error}</p>
-          </div>
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
 
+        {/* Empty State */}
         {!loading && !error && posts.length === 0 && (
-          <div className="card">
-            <div className="info-card">
-              <p className="info-card-text">No proposals found.</p>
-            </div>
-          </div>
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-16">
+              <div className="text-center space-y-2">
+                <h3 className="text-lg font-semibold">No proposals found</h3>
+                <p className="text-sm text-muted-foreground">
+                  Check back later for new proposals
+                </p>
+              </div>
+            </CardContent>
+          </Card>
         )}
 
+        {/* Proposals List */}
         {!loading && !error && posts.length > 0 && (
-          <div
-            style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
-          >
+          <div className="space-y-4">
             {posts.map((post) => (
               <ProposalCard
                 key={post.id}

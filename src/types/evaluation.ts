@@ -3,19 +3,29 @@ export interface EvaluationCriterion {
   reason: string;
 }
 
-export interface Alignment {
+export interface AttentionScore {
   score: "high" | "medium" | "low";
   reason: string;
 }
 
 export interface Evaluation {
+  // Quality Score Criteria (6 criteria)
   complete: EvaluationCriterion;
   legible: EvaluationCriterion;
   consistent: EvaluationCriterion;
-  genuine: EvaluationCriterion;
   compliant: EvaluationCriterion;
   justified: EvaluationCriterion;
-  alignment: Alignment;
+  measurable: EvaluationCriterion;
+
+  // Attention Score Criteria (2 criteria)
+  relevant: AttentionScore;
+  material: AttentionScore;
+
+  // Computed Scores
+  qualityScore: number;
+  attentionScore: number;
+
+  // Overall Result
   overallPass: boolean;
   summary: string;
 }

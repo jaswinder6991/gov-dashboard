@@ -9,20 +9,7 @@ export default async function handler(
   }
 
   try {
-    const DISCOURSE_URL =
-      process.env.DISCOURSE_URL || "https://discuss.near.vote";
-    const DISCOURSE_API_KEY = process.env.DISCOURSE_API_KEY;
-    const DISCOURSE_API_USERNAME = process.env.DISCOURSE_API_USERNAME;
-
-    // Build headers for authentication (if available)
-    const headers: HeadersInit = {
-      "Content-Type": "application/json",
-    };
-
-    if (DISCOURSE_API_KEY && DISCOURSE_API_USERNAME) {
-      headers["Api-Key"] = DISCOURSE_API_KEY;
-      headers["Api-Username"] = DISCOURSE_API_USERNAME;
-    }
+    const DISCOURSE_URL = process.env.DISCOURSE_URL || "https://gov.near.org";
 
     // Fetch latest topics with optional query parameters
     const order = req.query.order || "default";
@@ -31,7 +18,11 @@ export default async function handler(
     // Use category-specific endpoint
     const url = `${DISCOURSE_URL}/latest.json?order=${order}&per_page=${perPage}`;
 
-    const response = await fetch(url, { headers });
+    const response = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
 
     if (!response.ok) {
       throw new Error(`Discourse API error: ${response.status}`);
@@ -87,7 +78,7 @@ export default async function handler(
 
     const transformedPosts =
       data.topic_list?.topics
-        ?.filter((topic: any) => topic.category_id === 5)
+        ?.filter((topic: any) => topic.category_id === 168)
         ?.map((topic: any) => {
           const creatorPosterId = topic.posters?.[0]?.user_id;
           const creatorUser = data.users?.find(

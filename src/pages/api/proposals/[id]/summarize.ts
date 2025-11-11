@@ -1,9 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { proposalCache, CacheKeys } from "../../../../utils/cache-utils";
-import { stripHtml } from "@/lib/htmlUtils";
+import { proposalCache, CacheKeys } from "../../../../lib/utils/cache-utils";
+import { buildProposalSummaryPrompt } from "@/lib/prompts/summarizeProposal";
+import { stripFrontmatter } from "@/lib/utils/metadata";
 
 /**
- * POST /api/discourse/proposals/[id]/summarize
+ * POST /api/proposals/[id]/summarize
  *
  * Generates an AI summary of a PROPOSAL (the first post in a topic).
  * Executive-style summary focusing on key points and decision factors.
@@ -45,21 +46,13 @@ export default async function handler(
     }
 
     // ===================================================================
-    // FETCH FROM DISCOURSE
+    // FETCH FROM DISCOURSE (NO AUTH)
     // ===================================================================
-    const DISCOURSE_URL =
-      process.env.DISCOURSE_URL || "https://discuss.near.vote";
-    const DISCOURSE_API_KEY = process.env.DISCOURSE_API_KEY;
-    const DISCOURSE_API_USERNAME = process.env.DISCOURSE_API_USERNAME;
+    const DISCOURSE_URL = process.env.DISCOURSE_URL || "https://gov.near.org";
 
     const headers: HeadersInit = {
       "Content-Type": "application/json",
     };
-
-    if (DISCOURSE_API_KEY && DISCOURSE_API_USERNAME) {
-      headers["Api-Key"] = DISCOURSE_API_KEY;
-      headers["Api-Username"] = DISCOURSE_API_USERNAME;
-    }
 
     const topicResponse = await fetch(`${DISCOURSE_URL}/t/${id}.json`, {
       headers,
@@ -77,47 +70,52 @@ export default async function handler(
       return res.status(404).json({ error: "Proposal post not found" });
     }
 
-    const proposalContent = stripHtml(proposalPost.cooked);
+    // Fetch raw markdown content
+    let rawContent = "";
+    try {
+      const rawResponse = await fetch(`${DISCOURSE_URL}/raw/${id}`, {
+        headers: { Accept: "text/plain" },
+      });
+      if (rawResponse.ok) {
+        const fullRaw = await rawResponse.text();
+        // Remove the header line (username | date | #1)
+        rawContent = fullRaw.replace(
+          /^[\w\-_]+ \| \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC \| #\d+\n\n/,
+          ""
+        );
+      }
+    } catch (err) {
+      console.warn(`[Proposal Summary] Could not fetch raw content:`, err);
+    }
+
+    // Use raw if available, fallback to cooked
+    const content = rawContent || proposalPost.cooked;
+
+    // Strip frontmatter for cleaner summary
+    const contentWithoutFrontmatter = stripFrontmatter(content);
 
     // Truncate if needed
     const MAX_LENGTH = 8000;
     const truncatedContent =
-      proposalContent.length > MAX_LENGTH
-        ? proposalContent.substring(0, MAX_LENGTH) +
+      contentWithoutFrontmatter.length > MAX_LENGTH
+        ? contentWithoutFrontmatter.substring(0, MAX_LENGTH) +
           "\n\n[... content truncated for length ...]"
-        : proposalContent;
+        : contentWithoutFrontmatter;
 
     // ===================================================================
-    // GENERATE AI SUMMARY
+    // GENERATE AI SUMMARY USING PROMPT BUILDER
     // ===================================================================
     const apiKey = process.env.NEAR_AI_CLOUD_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ error: "AI API not configured" });
     }
 
-    const prompt = `You are summarizing a NEAR governance proposal. Provide a comprehensive executive summary.
-
-**Title:** ${topicData.title}
-**Author:** @${proposalPost.username}
-**Category:** ${topicData.category_id}
-
-**Proposal Content:**
-${truncatedContent}
-
-Provide a structured summary (200-400 words) covering:
-
-**Overview:** [2-3 sentences explaining what this proposal is about]
-
-**Key Points:**
-- [Main objectives and goals]
-- [Important details, metrics, or timelines]
-- [Any notable requirements or dependencies]
-
-**Impact:** [Who/what this affects and potential outcomes]
-
-**Considerations:** [Important factors for decision-makers to consider]
-
-Be thorough but concise. Focus on information relevant to decision-making.`;
+    // Use the prompt builder function
+    const prompt = buildProposalSummaryPrompt(
+      { title: topicData.title, category_id: topicData.category_id },
+      { username: proposalPost.username },
+      truncatedContent
+    );
 
     const summaryResponse = await fetch(
       "https://cloud-api.near.ai/v1/chat/completions",
@@ -157,7 +155,7 @@ Be thorough but concise. Focus on information relevant to decision-making.`;
       title: topicData.title,
       author: proposalPost.username,
       createdAt: proposalPost.created_at,
-      truncated: proposalContent.length > MAX_LENGTH,
+      truncated: contentWithoutFrontmatter.length > MAX_LENGTH,
       viewCount: topicData.views,
       replyCount: topicData.posts_count - 1, // Subtract the proposal itself
       likeCount: proposalPost.like_count || 0,
@@ -166,13 +164,13 @@ Be thorough but concise. Focus on information relevant to decision-making.`;
     };
 
     // ===================================================================
-    // STORE IN CACHE
+    // STORE IN CACHE (1 hour TTL)
     // ===================================================================
     proposalCache.set(cacheKey, response);
 
     return res.status(200).json(response);
   } catch (error: any) {
-    console.error("Proposal summary error:", error);
+    console.error("[Proposal Summary] Error:", error);
     return res.status(500).json({
       error: "Failed to generate proposal summary",
       details:

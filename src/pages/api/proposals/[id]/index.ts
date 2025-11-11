@@ -1,5 +1,21 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { extractMetadata, stripFrontmatter } from "@/lib/utils/metadata";
 
+/**
+ * GET /api/proposals/[id]
+ *
+ * Fetches a proposal (Discourse topic) with all its details and replies.
+ * Public endpoint - no authentication required.
+ *
+ * Returns:
+ * - Proposal details (first post)
+ * - Raw markdown content and clean content (without frontmatter)
+ * - Extracted frontmatter metadata
+ * - All replies
+ * - Metadata (views, likes, timestamps)
+ * - NEAR wallet if mentioned in proposal
+ * - Version number for revision tracking
+ */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -15,72 +31,120 @@ export default async function handler(
   }
 
   try {
-    const DISCOURSE_URL =
-      process.env.DISCOURSE_URL || "https://discuss.near.vote";
-    const DISCOURSE_API_KEY = process.env.DISCOURSE_API_KEY;
-    const DISCOURSE_API_USERNAME = process.env.DISCOURSE_API_USERNAME;
+    const DISCOURSE_URL = process.env.DISCOURSE_URL || "https://gov.near.org";
 
     const headers: HeadersInit = {
       "Content-Type": "application/json",
+      Accept: "application/json",
     };
 
-    if (DISCOURSE_API_KEY && DISCOURSE_API_USERNAME) {
-      headers["Api-Key"] = DISCOURSE_API_KEY;
-      headers["Api-Username"] = DISCOURSE_API_USERNAME;
-    }
-
-    // Fetch the topic details
     const topicResponse = await fetch(`${DISCOURSE_URL}/t/${id}.json`, {
       headers,
     });
 
     if (!topicResponse.ok) {
-      throw new Error(`Discourse API error: ${topicResponse.status}`);
+      return res.status(topicResponse.status).json({
+        error: "Failed to fetch proposal",
+        status: topicResponse.status,
+      });
     }
 
     const topicData = await topicResponse.json();
 
-    // Get the first post (the proposal itself)
     const firstPost = topicData.post_stream?.posts?.[0];
 
     if (!firstPost) {
-      throw new Error("Proposal not found");
+      return res.status(404).json({ error: "Proposal post not found" });
     }
 
-    // Get all other posts as replies (skip the first post)
-    const replies =
-      topicData.post_stream?.posts?.slice(1).map((post: any) => ({
+    let rawContent = "";
+    try {
+      const postId = firstPost.id;
+      const postResponse = await fetch(
+        `${DISCOURSE_URL}/posts/${postId}.json`,
+        {
+          headers,
+        }
+      );
+
+      if (postResponse.ok) {
+        const postData = await postResponse.json();
+        rawContent = postData.raw || "";
+      }
+    } catch (err) {
+      console.warn(
+        `[Proposal] Could not fetch raw content for post ${firstPost.id}:`,
+        err
+      );
+    }
+
+    const content = rawContent || firstPost.cooked;
+
+    const metadata = extractMetadata(content);
+
+    const contentWithoutFrontmatter = stripFrontmatter(content);
+
+    const replies = topicData.post_stream.posts.slice(1).map((post: any) => {
+      const likeCount =
+        post.actions_summary?.find((action: any) => action.id === 2)?.count ??
+        post.like_count ??
+        0;
+
+      return {
         id: post.id,
         username: post.username,
         created_at: post.created_at,
         cooked: post.cooked,
         post_number: post.post_number,
-      })) || [];
+        like_count: likeCount,
+        reply_to_post_number: post.reply_to_post_number || null,
+        reply_to_user: post.reply_to_user || null,
+        avatar_template: post.avatar_template || null,
+      };
+    });
 
-    // Find the user data
-    const user = topicData.details?.created_by;
+    const nearWalletMatch = content.match(
+      /(?:NEAR Account|Wallet|Account)[\s:]*([a-z0-9\-_]+\.near)/i
+    );
 
-    // Transform the data
     const proposalDetail = {
-      id: topicData.id,
+      id: firstPost.id,
       title: topicData.title,
-      content: firstPost.cooked, // HTML content
-      created_at: topicData.created_at,
-      username: user?.username || firstPost.username,
+      content: content,
+      contentWithoutFrontmatter: contentWithoutFrontmatter,
+      metadata: metadata,
+      version: firstPost.version || 1,
+      created_at: firstPost.created_at,
+      username: firstPost.username,
       topic_id: topicData.id,
       topic_slug: topicData.slug,
       reply_count: topicData.posts_count - 1,
-      views: topicData.views || 0,
+      views: topicData.views,
       last_posted_at: topicData.last_posted_at,
-      like_count: topicData.like_count || 0,
+      like_count:
+        topicData.like_count ??
+        topicData.actions_summary?.find((action: any) => action.id === 2)
+          ?.count ??
+        0,
+      near_wallet: nearWalletMatch ? nearWalletMatch[1] : null,
       category_id: topicData.category_id,
-      near_wallet: user?.custom_fields?.near_wallet || null,
-      replies,
+      replies: replies,
     };
 
-    res.status(200).json(proposalDetail);
+    console.log(
+      `[Proposal] Fetched topic ${id}: "${topicData.title}" by @${
+        firstPost.username
+      } v${firstPost.version || 1} (using ${
+        rawContent ? "raw" : "cooked"
+      } content)`
+    );
+
+    return res.status(200).json(proposalDetail);
   } catch (error: any) {
-    console.error("Error fetching proposal details:", error);
-    res.status(500).json({ error: error.message });
+    console.error("[Proposal] Error fetching proposal details:", error);
+    return res.status(500).json({
+      error: "Failed to fetch proposal details",
+      message: error.message,
+    });
   }
 }

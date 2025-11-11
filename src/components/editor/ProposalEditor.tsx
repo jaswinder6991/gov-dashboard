@@ -12,7 +12,7 @@ import type { Evaluation } from "@/types/evaluation";
 import { SidebarChat } from "@/components/editor/SidebarChat";
 import { EditorPane } from "@/components/editor/EditorPane";
 import { EvaluationSummary } from "@/components/editor/EvaluationSummary";
-import { diffPartialText } from "@/lib/diff";
+import { diffPartialText } from "@/lib/utils/diff";
 
 interface Message {
   id: string;

@@ -1,11 +1,18 @@
 import React from "react";
 import type { MessageRole } from "@/types/agui-events";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Loader2, Send, Wrench } from "lucide-react";
 
 interface Message {
   id: string;
   role: MessageRole;
   content: string;
 }
+
 interface ToolCallState {
   id: string;
   name: string;
@@ -37,253 +44,119 @@ export function SidebarChat({
   evaluationSlot?: React.ReactNode;
 }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+    <div className="flex flex-col h-full">
       {/* Header */}
-      <div
-        style={{
-          marginBottom: "1rem",
-          borderBottom: "1px solid var(--border-color)",
-          paddingBottom: "1rem",
-        }}
-      >
-        <h2
-          style={{
-            fontSize: "1.125rem",
-            margin: "0 0 0.25rem 0",
-            fontWeight: "600",
-          }}
-        >
-          Proposal Assistant
-        </h2>
-        <p style={{ fontSize: "0.875rem", color: "#6b7280", margin: 0 }}>
+      <div className="mb-4 pb-4 border-b">
+        <h2 className="text-lg font-semibold mb-1">Proposal Assistant</h2>
+        <p className="text-sm text-muted-foreground">
           Screen proposals and suggest improvements
         </p>
 
         {currentStep && (
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "0.5rem",
-              marginTop: "0.75rem",
-              padding: "0.375rem 0.75rem",
-              background: "#eff6ff",
-              color: "#1d4ed8",
-              borderRadius: "6px",
-              fontSize: "0.75rem",
-              fontWeight: "600",
-            }}
-          >
-            <span
-              style={{
-                display: "inline-block",
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                background: "var(--near-blue)",
-                animation: "pulse 1.5s ease-in-out infinite",
-              }}
-            />
+          <Badge variant="secondary" className="mt-3 gap-2">
+            <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
             {currentStep}
-          </div>
+          </Badge>
         )}
       </div>
 
       {/* Messages */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          display: "flex",
-          flexDirection: "column",
-          gap: "0.75rem",
-          marginBottom: "1rem",
-          paddingRight: "0.5rem",
-        }}
-      >
-        {messages.length === 0 ? (
-          <div>
-            <p
-              style={{
-                marginBottom: "0.75rem",
-                fontWeight: 600,
-                fontSize: "0.875rem",
-                color: "var(--text-primary)",
-              }}
-            >
-              Try a quick action:
-            </p>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.5rem",
-              }}
-            >
-              {suggestions.map((s, i) => (
-                <button
-                  key={i}
-                  onClick={() => sendMessage(s)}
-                  disabled={isRunning}
-                  className="btn btn-ghost"
-                  style={{
-                    justifyContent: "flex-start",
-                    textAlign: "left",
-                    fontSize: "0.875rem",
-                    padding: "0.75rem",
-                  }}
-                >
-                  {s}
-                </button>
-              ))}
+      <ScrollArea className="flex-1 pr-2 mb-4">
+        <div className="space-y-3">
+          {messages.length === 0 ? (
+            <div>
+              <p className="mb-3 font-semibold text-sm">Try a quick action:</p>
+              <div className="space-y-2">
+                {suggestions.map((suggestion, i) => (
+                  <Button
+                    key={i}
+                    onClick={() => sendMessage(suggestion)}
+                    disabled={isRunning}
+                    variant="outline"
+                    className="w-full justify-start text-left h-auto py-3 whitespace-normal"
+                    size="sm"
+                  >
+                    {suggestion}
+                  </Button>
+                ))}
+              </div>
             </div>
-          </div>
-        ) : (
-          <>
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                style={{
-                  padding: "0.75rem",
-                  background: m.role === "user" ? "#eff6ff" : "#f9fafb",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "#6b7280",
-                    marginBottom: "0.375rem",
-                    fontWeight: "600",
-                  }}
+          ) : (
+            <>
+              {messages.map((msg) => (
+                <Card
+                  key={msg.id}
+                  className={
+                    msg.role === "user" ? "bg-blue-50 border-blue-200" : ""
+                  }
                 >
-                  {m.role === "user" ? "You" : "Assistant"}
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.875rem",
-                    lineHeight: "1.6",
-                    color: "#374151",
-                    whiteSpace: "pre-wrap",
-                  }}
-                >
-                  {m.content}
-                </div>
-              </div>
-            ))}
+                  <CardContent className="pt-3 pb-3">
+                    <div className="text-xs font-semibold text-muted-foreground mb-2">
+                      {msg.role === "user" ? "You" : "Assistant"}
+                    </div>
+                    <div className="text-sm leading-relaxed whitespace-pre-wrap text-foreground">
+                      {msg.content}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
 
-            {currentMessage && (
-              <div
-                style={{
-                  padding: "0.75rem",
-                  background: "#f9fafb",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "#6b7280",
-                    marginBottom: "0.375rem",
-                    fontWeight: "600",
-                  }}
-                >
-                  Assistant
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.875rem",
-                    lineHeight: "1.6",
-                    color: "#374151",
-                    whiteSpace: "pre-wrap",
-                  }}
-                >
-                  {currentMessage.content}
-                </div>
-              </div>
-            )}
+              {currentMessage && (
+                <Card>
+                  <CardContent className="pt-3 pb-3">
+                    <div className="text-xs font-semibold text-muted-foreground mb-2">
+                      Assistant
+                    </div>
+                    <div className="text-sm leading-relaxed whitespace-pre-wrap text-foreground">
+                      {currentMessage.content}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
-            {Array.from(activeToolCalls.values()).map((tc) => (
-              <div
-                key={tc.id}
-                style={{
-                  padding: "0.75rem",
-                  background: "#fff7ed",
-                  border: "1px solid #fed7aa",
-                  borderRadius: "8px",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "#92400e",
-                    marginBottom: "0.375rem",
-                    fontWeight: "600",
-                  }}
-                >
-                  Tool Call
-                </div>
-                <div
-                  style={{
-                    fontFamily: "monospace",
-                    fontSize: "0.8rem",
-                    color: "#78350f",
-                    marginBottom: "0.375rem",
-                  }}
-                >
-                  {tc.name}({tc.args.substring(0, 50)}
-                  {tc.args.length > 50 ? "…" : ""})
-                </div>
-                <div style={{ fontSize: "0.75rem", color: "#b45309" }}>
-                  {tc.status === "in_progress"
-                    ? "⏳ In progress…"
-                    : "✓ Completed"}
-                </div>
-              </div>
-            ))}
+              {Array.from(activeToolCalls.values()).map((tc) => (
+                <Card key={tc.id} className="bg-orange-50 border-orange-200">
+                  <CardContent className="pt-3 pb-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Wrench className="h-3 w-3 text-orange-600" />
+                      <div className="text-xs font-semibold text-orange-900">
+                        Tool Call
+                      </div>
+                    </div>
+                    <div className="font-mono text-xs text-orange-800 mb-2">
+                      {tc.name}({tc.args.substring(0, 50)}
+                      {tc.args.length > 50 ? "…" : ""})
+                    </div>
+                    <Badge
+                      variant={
+                        tc.status === "completed" ? "default" : "secondary"
+                      }
+                      className="text-xs"
+                    >
+                      {tc.status === "in_progress"
+                        ? "⏳ In progress"
+                        : "✓ Completed"}
+                    </Badge>
+                  </CardContent>
+                </Card>
+              ))}
 
-            {isRunning && !currentMessage && activeToolCalls.size === 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  fontSize: "0.875rem",
-                  color: "#6b7280",
-                }}
-              >
-                <span
-                  className="spinner"
-                  style={{
-                    width: 16,
-                    height: 16,
-                    border: "2px solid #d1d5db",
-                    borderTopColor: "var(--near-blue)",
-                    borderRadius: "50%",
-                  }}
-                />
-                Thinking…
-              </div>
-            )}
-          </>
-        )}
+              {isRunning && !currentMessage && activeToolCalls.size === 0 && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Thinking…
+                </div>
+              )}
+            </>
+          )}
 
-        {evaluationSlot}
-      </div>
+          {evaluationSlot}
+        </div>
+      </ScrollArea>
 
       {/* Input */}
-      <div
-        style={{
-          display: "flex",
-          gap: "0.5rem",
-          borderTop: "1px solid var(--border-color)",
-          paddingTop: "1rem",
-        }}
-      >
-        <input
-          type="text"
+      <div className="flex gap-2 pt-4 border-t">
+        <Input
           value={inputMessage}
           onChange={(e) => setInputMessage(e.target.value)}
           onKeyDown={(e) => {
@@ -293,18 +166,20 @@ export function SidebarChat({
             }
           }}
           placeholder="Ask me to screen or improve…"
-          className="input"
           disabled={isRunning}
-          style={{ flex: 1, fontSize: "0.875rem" }}
+          className="text-sm"
         />
-        <button
+        <Button
           onClick={() => sendMessage(inputMessage)}
           disabled={isRunning || !inputMessage.trim()}
-          className="btn btn-primary"
-          style={{ padding: "0.75rem 1.25rem" }}
+          size="icon"
         >
-          Send
-        </button>
+          {isRunning ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Send className="h-4 w-4" />
+          )}
+        </Button>
       </div>
     </div>
   );

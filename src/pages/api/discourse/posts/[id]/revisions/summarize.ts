@@ -1,5 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { revisionCache, CacheKeys } from "../../../../../../utils/cache-utils";
+import {
+  revisionCache,
+  CacheKeys,
+} from "../../../../../../lib/utils/cache-utils";
+import { buildRevisionAnalysisPrompt } from "@/lib/prompts/summarizeRevisions";
 
 // TypeScript type definitions for Discourse API
 interface RevisionBodyChange {
@@ -74,21 +78,13 @@ export default async function handler(
     }
 
     // ===================================================================
-    // FETCH FROM DISCOURSE
+    // FETCH FROM DISCOURSE (NO AUTH)
     // ===================================================================
-    const DISCOURSE_URL =
-      process.env.DISCOURSE_URL || "https://discuss.near.vote";
-    const DISCOURSE_API_KEY = process.env.DISCOURSE_API_KEY;
-    const DISCOURSE_API_USERNAME = process.env.DISCOURSE_API_USERNAME;
+    const DISCOURSE_URL = process.env.DISCOURSE_URL || "https://gov.near.org";
 
     const headers: HeadersInit = {
       "Content-Type": "application/json",
     };
-
-    if (DISCOURSE_API_KEY && DISCOURSE_API_USERNAME) {
-      headers["Api-Key"] = DISCOURSE_API_KEY;
-      headers["Api-Username"] = DISCOURSE_API_USERNAME;
-    }
 
     // Get the post to check version
     const postResponse = await fetch(`${DISCOURSE_URL}/posts/${id}.json`, {
@@ -204,45 +200,21 @@ export default async function handler(
         : revisionTimeline;
 
     // ===================================================================
-    // GENERATE AI SUMMARY
+    // GENERATE AI SUMMARY USING PROMPT BUILDER
     // ===================================================================
     const apiKey = process.env.NEAR_AI_CLOUD_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ error: "AI API not configured" });
     }
 
-    const prompt = `You are analyzing revision history for a NEAR governance post. Provide insights into what changed and why.
-
-**Post ID:** ${id}
-**Original Author:** @${postData.username}
-**Total Revisions:** ${revisions.length}
-**Current Version:** ${version}
-
-**Revision Timeline:**
-${truncatedTimeline}
-
-Provide a comprehensive revision analysis (200-400 words) covering:
-
-**Summary of Changes:** [High-level overview of what was modified across all revisions]
-
-**Revision Breakdown:**
-- [Describe each major revision and its purpose]
-- [Note if changes were substantive vs. minor corrections]
-- [Highlight any title changes]
-
-**Nature of Edits:**
-- **Substantive Changes:** [Content that affects meaning, scope, or decision factors]
-- **Clarifications:** [Additions or rewording for better understanding]
-- **Corrections:** [Fixes to errors, typos, or formatting]
-- **Responses to Feedback:** [Changes that appear to address community concerns]
-
-**Timing & Patterns:** [When edits occurred - immediate fixes vs. later substantial changes]
-
-**Significance:** [Overall assessment - are these minor tweaks or major revisions that warrant re-reading?]
-
-**Recommendation:** [Should stakeholders review these changes? Do they materially affect the proposal?]
-
-Be specific about what changed. If revisions are minimal (typos, formatting), state that clearly. If substantive, highlight what decision-makers need to reconsider.`;
+    // Use the prompt builder function
+    const prompt = buildRevisionAnalysisPrompt(
+      id,
+      { username: postData.username },
+      revisions,
+      version,
+      truncatedTimeline
+    );
 
     const summaryResponse = await fetch(
       "https://cloud-api.near.ai/v1/chat/completions",

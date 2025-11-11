@@ -29,12 +29,10 @@ export function useNear() {
   const [provider, setProvider] = useState<JsonRpcProvider | null>(null);
   const [mounted, setMounted] = useState(false);
 
-  // First effect: mark as mounted
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Second effect: load NEAR libraries dynamically
   useEffect(() => {
     if (!mounted || typeof window === "undefined") {
       setLoading(false);
@@ -46,7 +44,6 @@ export function useNear() {
 
     async function initNear() {
       try {
-        // Dynamic imports - only happen on client
         const [{ NearConnector }, { JsonRpcProvider }] = await Promise.all([
           import("@hot-labs/near-connect"),
           import("@near-js/providers"),
@@ -54,7 +51,6 @@ export function useNear() {
 
         if (!isSubscribed) return;
 
-        // Initialize connector and provider
         nearConnector = new NearConnector({ network: "mainnet" });
         const rpcProvider = new JsonRpcProvider({
           url: "https://rpc.fastnear.com",
@@ -63,18 +59,16 @@ export function useNear() {
         setConnector(nearConnector);
         setProvider(rpcProvider);
 
-        // Try to get connected wallet
         try {
           const { wallet, accounts } = await nearConnector.getConnectedWallet();
-          if (isSubscribed) {
+          if (isSubscribed && wallet && accounts?.length > 0) {
             setWallet(wallet);
             setSignedAccountId(accounts[0].accountId);
           }
-        } catch {
-          // Not connected yet
+        } catch (error) {
+          console.log("No wallet connected yet:", error);
         }
 
-        // Set up event listeners
         nearConnector.on("wallet:signOut", () => {
           if (isSubscribed) {
             setWallet(undefined);
@@ -86,7 +80,9 @@ export function useNear() {
           if (isSubscribed) {
             setWallet(payload.wallet);
             const accounts = await payload.wallet.getAccounts();
-            setSignedAccountId(accounts[0].accountId);
+            if (accounts?.length > 0) {
+              setSignedAccountId(accounts[0].accountId);
+            }
           }
         });
       } catch (error) {
@@ -106,11 +102,17 @@ export function useNear() {
   }, [mounted]);
 
   async function signIn() {
+    console.log("signIn called", { connector, wallet });
     if (!connector) {
       throw new Error("Connector not initialized (not in browser)");
     }
-    const newWallet = await connector.connect();
-    console.log("Connected wallet", newWallet);
+    try {
+      const newWallet = await connector.connect();
+      console.log("Connected wallet", newWallet);
+    } catch (error) {
+      console.error("Sign in error:", error);
+      throw error;
+    }
   }
 
   async function signOut() {
@@ -159,7 +161,6 @@ export function useNear() {
     });
   }
 
-  // Don't return anything until mounted on client
   if (!mounted) {
     return {
       signedAccountId: "",
@@ -170,6 +171,7 @@ export function useNear() {
       viewFunction: async () => {},
       callFunction: async () => {},
       provider: null,
+      connector: null,
     };
   }
 
@@ -182,5 +184,6 @@ export function useNear() {
     viewFunction,
     callFunction,
     provider,
+    connector,
   };
 }

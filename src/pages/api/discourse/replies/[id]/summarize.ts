@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { replyCache, CacheKeys } from "../../../../../utils/cache-utils";
+import { replyCache, CacheKeys } from "../../../../../lib/utils/cache-utils";
+import { buildReplySummaryPrompt } from "@/lib/prompts/summarizeReply";
 
 // TypeScript type definitions for Discourse API
 interface ReplyToUser {
@@ -32,11 +33,6 @@ interface DiscoursePost {
  *
  * Generates an AI summary of a SINGLE REPLY.
  * Very brief, focused on core message and position.
- *
- * OPTIMIZATIONS:
- * - Direct post fetch (GET /posts/{id}.json) for better performance
- * - 30 minute cache TTL (individual replies don't change)
- * - Reply threading info (shows which post it's replying to)
  *
  * Security:
  * - Public endpoint (no auth required)
@@ -73,24 +69,15 @@ export default async function handler(
     }
 
     // ===================================================================
-    // FETCH FROM DISCOURSE (OPTIMIZED: DIRECT POST FETCH)
+    // FETCH FROM DISCOURSE (NO AUTH)
     // ===================================================================
-    const DISCOURSE_URL =
-      process.env.DISCOURSE_URL || "https://discuss.near.vote";
-    const DISCOURSE_API_KEY = process.env.DISCOURSE_API_KEY;
-    const DISCOURSE_API_USERNAME = process.env.DISCOURSE_API_USERNAME;
+    const DISCOURSE_URL = process.env.DISCOURSE_URL || "https://gov.near.org";
 
     const headers: HeadersInit = {
       "Content-Type": "application/json",
     };
 
-    if (DISCOURSE_API_KEY && DISCOURSE_API_USERNAME) {
-      headers["Api-Key"] = DISCOURSE_API_KEY;
-      headers["Api-Username"] = DISCOURSE_API_USERNAME;
-    }
-
-    // OPTIMIZED: Direct post fetch (primary method)
-    // This is faster and uses less bandwidth than fetching the entire topic
+    // Direct post fetch (primary method)
     const postResponse = await fetch(`${DISCOURSE_URL}/posts/${replyId}.json`, {
       headers,
     });
@@ -112,6 +99,49 @@ export default async function handler(
         .trim();
     };
 
+    // ===================================================================
+    // FETCH PARENT POST IF THIS IS A REPLY TO ANOTHER POST
+    // ===================================================================
+    let parentPostContent: string | null = null;
+    let parentPostAuthor: string | null = null;
+
+    if (replyPost.reply_to_post_number) {
+      try {
+        // Fetch the topic to get all posts
+        const topicResponse = await fetch(
+          `${DISCOURSE_URL}/t/${replyPost.topic_id}.json`,
+          { headers }
+        );
+
+        if (topicResponse.ok) {
+          const topicData = await topicResponse.json();
+          const posts = topicData.post_stream?.posts || [];
+
+          // Find the parent post by post_number
+          const parentPost = posts.find(
+            (p: DiscoursePost) =>
+              p.post_number === replyPost.reply_to_post_number
+          );
+
+          if (parentPost) {
+            parentPostContent = stripHtml(parentPost.cooked);
+            parentPostAuthor = parentPost.username;
+
+            // Truncate parent post if very long (keep first 500 chars)
+            const MAX_PARENT_LENGTH = 500;
+            if (parentPostContent.length > MAX_PARENT_LENGTH) {
+              parentPostContent =
+                parentPostContent.substring(0, MAX_PARENT_LENGTH) +
+                "\n[... parent post truncated ...]";
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`[Reply Summary] Failed to fetch parent post:`, error);
+        // Continue without parent context if fetch fails
+      }
+    }
+
     const replyContent = stripHtml(replyPost.cooked);
 
     // Truncate if needed (though replies are usually shorter)
@@ -122,7 +152,24 @@ export default async function handler(
         : replyContent;
 
     // ===================================================================
-    // GENERATE AI SUMMARY
+    // BUILD CONTENT WITH PARENT POST CONTEXT
+    // ===================================================================
+    let contentWithContext = truncatedContent;
+
+    if (parentPostContent && parentPostAuthor) {
+      contentWithContext = `**REPLYING TO (Post #${replyPost.reply_to_post_number} by @${parentPostAuthor}):**
+
+${parentPostContent}
+
+---
+
+**THIS REPLY:**
+
+${truncatedContent}`;
+    }
+
+    // ===================================================================
+    // GENERATE AI SUMMARY USING PROMPT BUILDER
     // ===================================================================
     const apiKey = process.env.NEAR_AI_CLOUD_API_KEY;
     if (!apiKey) {
@@ -134,38 +181,17 @@ export default async function handler(
       replyPost.actions_summary?.find((a: ActionSummary) => a.id === 2)
         ?.count || 0;
 
-    // Build prompt with all context including reply threading
-    const prompt = `You are summarizing a single reply in a NEAR governance discussion. Be very concise and focus on the core message.
-
-**Author:** @${replyPost.username}
-**Post Number:** #${replyPost.post_number}
-${likeCount > 0 ? `**Engagement:** ${likeCount} likes` : ""}
-${
-  replyPost.reply_to_post_number && replyPost.reply_to_user
-    ? `**Replying to:** @${replyPost.reply_to_user.username} (Post #${replyPost.reply_to_post_number})`
-    : replyPost.reply_to_post_number
-    ? `**Replying to:** Post #${replyPost.reply_to_post_number}`
-    : ""
-}
-
-**Reply Content:**
-${truncatedContent}
-
-Provide a brief summary (50-100 words maximum) covering:
-
-**Position:** [Supporting/Opposing/Suggesting modifications/Asking questions/Providing information${
-      replyPost.reply_to_post_number ? "/Responding to specific concern" : ""
-    }]
-
-**Main Point:** [1-2 sentences summarizing the core message${
-      replyPost.reply_to_post_number
-        ? " and how it relates to the post being replied to"
-        : ""
-    }]
-
-**Key Details:** [Any specific concerns, suggestions, questions, or data mentioned - keep brief]
-
-Be extremely concise. If the reply is very short or simple (like "I agree" or "+1"), just say so directly without elaboration.`;
+    // Use the prompt builder function
+    const prompt = buildReplySummaryPrompt(
+      {
+        username: replyPost.username,
+        post_number: replyPost.post_number,
+        reply_to_post_number: replyPost.reply_to_post_number ?? undefined,
+        reply_to_user: replyPost.reply_to_user ?? undefined,
+      },
+      likeCount,
+      contentWithContext
+    );
 
     const summaryResponse = await fetch(
       "https://cloud-api.near.ai/v1/chat/completions",
@@ -216,6 +242,7 @@ Be extremely concise. If the reply is very short or simple (like "I agree" or "+
             postNumber: replyPost.reply_to_post_number,
           }
         : null,
+      parentPostIncluded: !!parentPostContent,
       truncated: replyContent.length > MAX_LENGTH,
       generatedAt: Date.now(), // For cache age tracking
       cached: false,
@@ -228,7 +255,7 @@ Be extremely concise. If the reply is very short or simple (like "I agree" or "+
 
     return res.status(200).json(response);
   } catch (error: any) {
-    console.error("Reply summary error:", error);
+    console.error("[Reply Summary] Error:", error);
     return res.status(500).json({
       error: "Failed to generate reply summary",
       details:

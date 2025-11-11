@@ -46,7 +46,7 @@ cp .env.example .env
 ```env
 DATABASE_URL=postgresql://user:password@localhost:5432/neargov
 NEAR_AI_CLOUD_API_KEY=your_api_key_here
-DISCOURSE_URL=https://discuss.near.vote
+DISCOURSE_URL=https://gov.near.org
 DISCOURSE_API_KEY=your_discourse_api_key
 DISCOURSE_API_USERNAME=your_discourse_username
 ```

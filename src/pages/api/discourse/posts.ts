@@ -9,7 +9,7 @@ export default async function handler(
   }
 
   try {
-    const response = await fetch("https://discuss.near.vote/posts.json");
+    const response = await fetch("https://gov.near.org/posts.json");
 
     if (!response.ok) {
       throw new Error(`Discourse API error: ${response.status}`);

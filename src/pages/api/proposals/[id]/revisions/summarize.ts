@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { revisionCache, CacheKeys } from "../../../../../utils/cache-utils";
-import { stripHtml } from "@/lib/htmlUtils";
+import { revisionCache, CacheKeys } from "../../../../../lib/utils/cache-utils";
+import { buildRevisionAnalysisPrompt } from "@/lib/prompts/summarizeRevisions";
+import { stripHtml } from "@/lib/utils/htmlUtils";
 
 // TypeScript type definitions for Discourse API
 interface RevisionBodyChange {
@@ -31,6 +32,10 @@ interface DiscourseRevision {
  * Analyzes what changed, why, and the significance of edits.
  *
  * CACHING: 15 minute TTL
+ *
+ * Security:
+ * - Public endpoint (no auth required)
+ * - Rate limited to prevent abuse
  */
 export default async function handler(
   req: NextApiRequest,
@@ -62,21 +67,13 @@ export default async function handler(
     }
 
     // ===================================================================
-    // FETCH FROM DISCOURSE
+    // FETCH FROM DISCOURSE (NO AUTH)
     // ===================================================================
-    const DISCOURSE_URL =
-      process.env.DISCOURSE_URL || "https://discuss.near.vote";
-    const DISCOURSE_API_KEY = process.env.DISCOURSE_API_KEY;
-    const DISCOURSE_API_USERNAME = process.env.DISCOURSE_API_USERNAME;
+    const DISCOURSE_URL = process.env.DISCOURSE_URL || "https://gov.near.org";
 
     const headers: HeadersInit = {
       "Content-Type": "application/json",
     };
-
-    if (DISCOURSE_API_KEY && DISCOURSE_API_USERNAME) {
-      headers["Api-Key"] = DISCOURSE_API_KEY;
-      headers["Api-Username"] = DISCOURSE_API_USERNAME;
-    }
 
     // Get topic to find first post
     const topicResponse = await fetch(`${DISCOURSE_URL}/t/${id}.json`, {
@@ -99,6 +96,10 @@ export default async function handler(
 
     const postId = firstPost.id;
     const version = firstPost.version || 1;
+
+    console.log(
+      `[Proposal Revisions] Topic ${id} -> Post ${postId} version ${version}`
+    );
 
     // If version is 1, no edits have been made
     if (version <= 1) {
@@ -132,9 +133,19 @@ export default async function handler(
             body_changes: revData.body_changes,
             title_changes: revData.title_changes,
           });
+
+          console.log(`[Proposal Revisions] Fetched revision ${i}/${version}`);
+        } else {
+          console.warn(
+            `[Proposal Revisions] Failed to fetch revision ${i}: ${revResponse.status}`
+          );
         }
       } catch (err) {
-        console.error(`Error fetching revision ${i}:`, err);
+        console.error(
+          `[Proposal Revisions] Error fetching revision ${i}:`,
+          err
+        );
+        // Continue fetching other revisions
       }
     }
 
@@ -213,56 +224,21 @@ export default async function handler(
         : revisionTimeline;
 
     // ===================================================================
-    // GENERATE AI SUMMARY
+    // GENERATE AI SUMMARY USING PROMPT BUILDER
     // ===================================================================
     const apiKey = process.env.NEAR_AI_CLOUD_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ error: "AI API not configured" });
     }
 
-    const prompt = `You are analyzing revision history for a NEAR governance post. Provide insights into what changed and why.
-
-**Topic ID:** ${id}
-**Post ID:** ${postId}
-**Original Author:** @${firstPost.username}
-**Total Revisions:** ${revisions.length}
-**Current Version:** ${version}
-
-**Revision Timeline:**
-${truncatedTimeline}
-
-**CRITICAL INSTRUCTIONS FOR FACTUAL CHANGES:**
-When factual claims change (numbers, dates, names, commitments, scope, timelines), you MUST:
-1. Identify what it was BEFORE and what it is AFTER
-2. State both values explicitly: "Changed from X to Y"
-3. Assess the impact of the change
-4. Classify as SUBSTANTIVE regardless of how the author describes it
-
-A change is substantive if it affects: meaning, scope, commitments, decision factors, or verifiable facts.
-A change is minor if it only affects: grammar, spelling, formatting, or clarity without changing facts.
-
-Provide a comprehensive revision analysis (200-400 words) covering:
-
-**Summary of Changes:** [High-level overview. For factual changes, state BEFORE → AFTER.]
-
-**Revision Breakdown:**
-- [Describe each major revision]
-- [Classify as substantive vs. minor]
-- [For factual changes: "Changed from X to Y" and explain impact]
-
-**Nature of Edits:**
-- **Substantive Changes:** [Changes to facts, numbers, dates, commitments, scope, or policies. Include before/after values.]
-- **Clarifications:** [Rewording that improves clarity without changing facts]
-- **Minor Corrections:** [Grammar, spelling, or formatting only]
-- **Responses to Feedback:** [Changes addressing community concerns]
-
-**Timing & Patterns:** [When edits occurred and what this suggests]
-
-**Significance:** [Minor tweaks or major revisions warranting re-reading?]
-
-**Recommendation:** [Should stakeholders review? Do changes materially affect the proposal?]
-
-Be specific. If truly minor, state that. If substantive, highlight what decision-makers need to reconsider.`;
+    // Use the prompt builder function
+    const prompt = buildRevisionAnalysisPrompt(
+      postId.toString(),
+      { username: firstPost.username },
+      revisions,
+      version,
+      truncatedTimeline
+    );
 
     const summaryResponse = await fetch(
       "https://cloud-api.near.ai/v1/chat/completions",
@@ -325,7 +301,7 @@ Be specific. If truly minor, state that. If substantive, highlight what decision
 
     return res.status(200).json(response);
   } catch (error: any) {
-    console.error("Revision summary error:", error);
+    console.error("[Proposal Revisions] Error:", error);
     return res.status(500).json({
       error: "Failed to generate revision summary",
       details:

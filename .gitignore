@@ -18,3 +18,11 @@ out/
 
 # Tests
 tests/
+
+# TypeScript
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/

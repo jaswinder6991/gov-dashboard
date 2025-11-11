@@ -1,7 +1,20 @@
 import React, { useMemo } from "react";
 import type MarkdownIt from "markdown-it";
 import type { Evaluation } from "@/types/evaluation";
-import { diffPartialText } from "@/lib/diff";
+import { diffPartialText } from "@/lib/utils/diff";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { CheckCircle2, AlertTriangle, X, Check } from "lucide-react";
+import { Separator } from "@/components/ui/separator";
 
 export function ConfirmModal({
   onConfirm,
@@ -12,6 +25,7 @@ export function ConfirmModal({
   afterTitle,
   afterContent,
   md,
+  open,
 }: {
   onConfirm: () => void;
   onReject: () => void;
@@ -21,6 +35,7 @@ export function ConfirmModal({
   afterTitle: string;
   afterContent: string;
   md: MarkdownIt;
+  open: boolean;
 }) {
   const renderedAfter = useMemo(
     () => md.render(afterContent || ""),
@@ -28,149 +43,124 @@ export function ConfirmModal({
   );
 
   return (
-    <div className="modal-backdrop">
-      <div className="modal" style={{ maxHeight: "90vh", overflowY: "auto" }}>
-        <h2 className="section-title" style={{ marginBottom: "1rem" }}>
-          Review AI Changes
-        </h2>
+    <Dialog open={open} onOpenChange={(open) => !open && onReject()}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Review AI Changes</DialogTitle>
+          <DialogDescription>
+            Review the changes below.{" "}
+            <span className="text-green-700 italic">Green italic text</span>{" "}
+            shows additions,{" "}
+            <span className="text-red-700 line-through">red strikethrough</span>{" "}
+            shows removals.
+          </DialogDescription>
+        </DialogHeader>
 
-        {evaluation && (
-          <div
-            className={`info-card ${
-              evaluation.overallPass ? "info-card-success" : "info-card-warning"
-            }`}
-            style={{
-              marginBottom: "1.5rem",
-              padding: "1rem",
-              background: evaluation.overallPass ? "#f0fdf4" : "#fffbeb",
-              border: evaluation.overallPass
-                ? "1px solid #86efac"
-                : "1px solid #fcd34d",
-            }}
-          >
-            <div className="info-card-header">
-              <span
-                className={`info-card-icon ${
+        <ScrollArea className="flex-1 pr-4">
+          <div className="space-y-6">
+            {/* Evaluation */}
+            {evaluation && (
+              <Alert
+                className={
                   evaluation.overallPass
-                    ? "info-card-icon-success"
-                    : "info-card-icon-error"
-                }`}
+                    ? "bg-green-50 border-green-200"
+                    : "bg-yellow-50 border-yellow-200"
+                }
               >
-                {evaluation.overallPass ? "✓" : "⚠"}
-              </span>
-              <h3 className="info-card-title">
-                {evaluation.overallPass
-                  ? "Passes Screening"
-                  : "Still Needs Work"}
-              </h3>
+                <div className="flex items-center gap-2 mb-2">
+                  {evaluation.overallPass ? (
+                    <CheckCircle2 className="h-5 w-5 text-green-600" />
+                  ) : (
+                    <AlertTriangle className="h-5 w-5 text-yellow-600" />
+                  )}
+                  <span
+                    className={`font-semibold ${
+                      evaluation.overallPass
+                        ? "text-green-900"
+                        : "text-yellow-900"
+                    }`}
+                  >
+                    {evaluation.overallPass
+                      ? "Passes Screening"
+                      : "Still Needs Work"}
+                  </span>
+                </div>
+                <AlertDescription
+                  className={
+                    evaluation.overallPass
+                      ? "text-green-800"
+                      : "text-yellow-800"
+                  }
+                >
+                  {evaluation.summary}
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {/* Title Changes */}
+            <div>
+              <h3 className="text-sm font-semibold mb-2">Title Changes</h3>
+              <div
+                className="p-3 bg-muted rounded-lg text-sm leading-relaxed"
+                dangerouslySetInnerHTML={{
+                  __html: diffPartialText(beforeTitle || "", afterTitle || ""),
+                }}
+              />
             </div>
-            <p className="info-card-text" style={{ marginTop: "0.5rem" }}>
-              {evaluation.summary}
-            </p>
+
+            <Separator />
+
+            {/* Content Changes (Diff) */}
+            <div>
+              <h3 className="text-sm font-semibold mb-2">
+                Content Changes (Diff)
+              </h3>
+              <ScrollArea className="h-[300px]">
+                <div
+                  className="p-3 bg-muted rounded-lg text-sm leading-relaxed"
+                  dangerouslySetInnerHTML={{
+                    __html: diffPartialText(
+                      beforeContent || "",
+                      afterContent || ""
+                    ),
+                  }}
+                />
+              </ScrollArea>
+            </div>
+
+            <Separator />
+
+            {/* Rendered Preview */}
+            <div>
+              <h3 className="text-sm font-semibold mb-2">
+                Updated Content (Preview)
+              </h3>
+              <ScrollArea className="h-[400px]">
+                <div className="p-5 bg-muted rounded-lg">
+                  <h1 className="text-2xl font-bold mb-4">
+                    {afterTitle || "Untitled"}
+                  </h1>
+                  <div
+                    className="prose prose-sm max-w-none"
+                    dangerouslySetInnerHTML={{ __html: renderedAfter }}
+                  />
+                </div>
+              </ScrollArea>
+            </div>
           </div>
-        )}
+        </ScrollArea>
 
-        <p
-          style={{
-            fontSize: "0.875rem",
-            color: "var(--text-secondary)",
-            marginBottom: "1.5rem",
-          }}
-        >
-          Review the changes below.{" "}
-          <em style={{ color: "#166534" }}>Green italic text</em> shows
-          additions, <s style={{ color: "#991b1b" }}>red strikethrough</s> shows
-          removals.
-        </p>
-
-        {/* Title Changes */}
-        <div style={{ marginBottom: "1.5rem" }}>
-          <label className="label" style={{ marginBottom: "0.5rem" }}>
-            Title Changes
-          </label>
-          <div
-            className="card"
-            style={{
-              padding: "0.875rem",
-              background: "#f9fafb",
-              fontSize: "0.9rem",
-              lineHeight: "1.6",
-            }}
-            dangerouslySetInnerHTML={{
-              __html: diffPartialText(beforeTitle || "", afterTitle || ""),
-            }}
-          />
-        </div>
-
-        {/* Content Changes (Diff) */}
-        <div style={{ marginBottom: "1.5rem" }}>
-          <label className="label" style={{ marginBottom: "0.5rem" }}>
-            Content Changes (Diff)
-          </label>
-          <div
-            className="card scroll-box"
-            style={{
-              padding: "0.875rem",
-              background: "#f9fafb",
-              fontSize: "0.875rem",
-              lineHeight: "1.6",
-              maxHeight: "300px",
-              overflowY: "auto",
-            }}
-            dangerouslySetInnerHTML={{
-              __html: diffPartialText(beforeContent || "", afterContent || ""),
-            }}
-          />
-        </div>
-
-        {/* Rendered Preview */}
-        <div style={{ marginBottom: "1.5rem" }}>
-          <label className="label" style={{ marginBottom: "0.5rem" }}>
-            Updated Content (Preview)
-          </label>
-          <div
-            className="card scroll-box"
-            style={{
-              padding: "1.25rem",
-              maxHeight: "400px",
-              overflowY: "auto",
-            }}
-          >
-            <h1 className="markdown-title">{afterTitle || "Untitled"}</h1>
-            <div
-              className="markdown-content"
-              dangerouslySetInnerHTML={{ __html: renderedAfter }}
-            />
-          </div>
-        </div>
-
-        {/* Action Buttons */}
-        <div
-          style={{
-            display: "flex",
-            gap: "0.75rem",
-            paddingTop: "1rem",
-            borderTop: "1px solid var(--border-color)",
-          }}
-        >
-          <button
-            onClick={onReject}
-            className="btn btn-ghost"
-            type="button"
-            style={{ flex: 1 }}
-          >
+        <DialogFooter className="gap-2">
+          <Button onClick={onReject} variant="outline" className="gap-2">
+            <X className="h-4 w-4" />
             Reject Changes
-          </button>
-          <button
-            onClick={onConfirm}
-            className="btn btn-primary"
-            type="button"
-            style={{ flex: 1 }}
-          >
+          </Button>
+          <Button onClick={onConfirm} className="gap-2">
+            <Check className="h-4 w-4" />
             Accept Changes
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

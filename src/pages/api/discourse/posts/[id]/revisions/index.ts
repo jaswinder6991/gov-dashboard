@@ -1,5 +1,17 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
+/**
+ * GET /api/discourse/topics/[id]/revisions
+ *
+ * Fetches all revisions for a topic's first post (the proposal).
+ * Public endpoint - no authentication required.
+ *
+ * Returns:
+ * - post_id: The ID of the first post
+ * - revisions: Array of all revisions with changes
+ * - total_revisions: Count of revisions
+ * - current_version: Latest version number
+ */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -15,19 +27,11 @@ export default async function handler(
   }
 
   try {
-    const DISCOURSE_URL =
-      process.env.DISCOURSE_URL || "https://discuss.near.vote";
-    const DISCOURSE_API_KEY = process.env.DISCOURSE_API_KEY;
-    const DISCOURSE_API_USERNAME = process.env.DISCOURSE_API_USERNAME;
+    const DISCOURSE_URL = process.env.DISCOURSE_URL || "https://gov.near.org";
 
     const headers: HeadersInit = {
       "Content-Type": "application/json",
     };
-
-    if (DISCOURSE_API_KEY && DISCOURSE_API_USERNAME) {
-      headers["Api-Key"] = DISCOURSE_API_KEY;
-      headers["Api-Username"] = DISCOURSE_API_USERNAME;
-    }
 
     // Get the topic to find the first post
     const topicResponse = await fetch(`${DISCOURSE_URL}/t/${id}.json`, {
@@ -35,20 +39,23 @@ export default async function handler(
     });
 
     if (!topicResponse.ok) {
-      throw new Error(`Discourse API error: ${topicResponse.status}`);
+      return res.status(topicResponse.status).json({
+        error: "Failed to fetch topic",
+        status: topicResponse.status,
+      });
     }
 
     const topicData = await topicResponse.json();
     const firstPost = topicData.post_stream?.posts?.[0];
 
     if (!firstPost) {
-      throw new Error("Post not found");
+      return res.status(404).json({ error: "Post not found" });
     }
 
     const postId = firstPost.id;
     const version = firstPost.version || 1;
 
-    console.log("Post", postId, "version:", version);
+    console.log(`[Revisions] Post ${postId} is at version ${version}`);
 
     // If version is 1, no edits have been made
     if (version <= 1) {
@@ -60,18 +67,15 @@ export default async function handler(
       });
     }
 
-    // Fetch all revisions (they always start at 2)
+    // Fetch all revisions (they always start at version 2)
     const revisions = [];
     for (let i = 2; i <= version; i++) {
       try {
         const revUrl = `${DISCOURSE_URL}/posts/${postId}/revisions/${i}.json`;
-        console.log("Fetching:", revUrl);
-
         const revResponse = await fetch(revUrl, { headers });
 
         if (revResponse.ok) {
           const revData = await revResponse.json();
-          console.log("Got revision", i);
 
           revisions.push({
             version: revData.current_version || i,
@@ -81,22 +85,30 @@ export default async function handler(
             body_changes: revData.body_changes,
             title_changes: revData.title_changes,
           });
+
+          console.log(`[Revisions] Fetched revision ${i}/${version}`);
         } else {
-          console.log("Revision", i, "failed:", revResponse.status);
+          console.warn(
+            `[Revisions] Failed to fetch revision ${i}: ${revResponse.status}`
+          );
         }
       } catch (err) {
-        console.error(`Error fetching revision ${i}:`, err);
+        console.error(`[Revisions] Error fetching revision ${i}:`, err);
+        // Continue fetching other revisions
       }
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       post_id: postId,
       revisions,
       total_revisions: revisions.length,
       current_version: version,
     });
   } catch (error: any) {
-    console.error("Error fetching revisions:", error);
-    res.status(500).json({ error: error.message });
+    console.error("[Revisions] Error:", error);
+    return res.status(500).json({
+      error: "Failed to fetch revisions",
+      message: error.message,
+    });
   }
 }

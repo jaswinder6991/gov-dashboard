@@ -32,20 +32,20 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  // Extract topicId from URL parameter
-  const { topicId, revisionNumber, all } = req.query;
-
-  // Validate topicId
-  if (!topicId || typeof topicId !== "string") {
-    return res.status(400).json({ error: "Invalid topic ID" });
-  }
-
   // Only allow GET requests
   if (req.method !== "GET") {
     return res.status(405).json({
       error: "Method not allowed",
       message: "This endpoint only supports GET requests",
     });
+  }
+
+  // Extract topicId from URL parameter
+  const { topicId, revisionNumber, all } = req.query;
+
+  // Validate topicId
+  if (!topicId || typeof topicId !== "string") {
+    return res.status(400).json({ error: "Invalid topic ID" });
   }
 
   try {
@@ -69,6 +69,8 @@ export default async function handler(
         screenings: results.map((screening) => ({
           revisionNumber: screening.revisionNumber,
           evaluation: screening.evaluation,
+          qualityScore: screening.qualityScore,
+          attentionScore: screening.attentionScore,
           title: screening.title,
           nearAccount: screening.nearAccount,
           timestamp: screening.timestamp.toISOString(),
@@ -111,6 +113,8 @@ export default async function handler(
       return res.status(200).json({
         revisionNumber: screening.revisionNumber,
         evaluation: screening.evaluation,
+        qualityScore: screening.qualityScore,
+        attentionScore: screening.attentionScore,
         title: screening.title,
         nearAccount: screening.nearAccount,
         timestamp: screening.timestamp.toISOString(),
@@ -135,16 +139,18 @@ export default async function handler(
 
     const screening = result[0];
 
-    // Return screening data with revision number
+    // Return screening data with revision number and computed scores
     return res.status(200).json({
       revisionNumber: screening.revisionNumber,
       evaluation: screening.evaluation,
+      qualityScore: screening.qualityScore,
+      attentionScore: screening.attentionScore,
       title: screening.title,
       nearAccount: screening.nearAccount,
       timestamp: screening.timestamp.toISOString(),
     });
   } catch (error) {
-    console.error("Database error:", error);
+    console.error("[getAnalysis] Database error:", error);
     return res.status(500).json({
       error: "Internal server error",
       message: "Failed to fetch screening results",
