@@ -1,6 +1,13 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { replyCache, CacheKeys } from "../../../../../lib/utils/cache-utils";
 import { buildReplySummaryPrompt } from "@/lib/prompts/summarizeReply";
+import {
+  createRateLimiter,
+  getClientIdentifier,
+} from "@/lib/server/rateLimiter";
+import { rateLimitConfig } from "@/lib/config/rateLimit";
+
+const replyLimiter = createRateLimiter(rateLimitConfig.replySummary);
 
 // TypeScript type definitions for Discourse API
 interface ReplyToUser {
@@ -50,6 +57,32 @@ export default async function handler(
 
   if (!replyId || typeof replyId !== "string") {
     return res.status(400).json({ error: "Invalid reply ID" });
+  }
+
+  const clientId = getClientIdentifier(req);
+  const { allowed, remaining, resetTime } = replyLimiter.check(clientId);
+  const secondsUntilReset = Math.max(
+    0,
+    Math.ceil((resetTime - Date.now()) / 1000)
+  );
+
+  res.setHeader("X-RateLimit-Remaining", Math.max(remaining, 0).toString());
+  res.setHeader("X-RateLimit-Limit", replyLimiter.limit.toString());
+  res.setHeader("X-RateLimit-Reset", secondsUntilReset.toString());
+
+  if (!allowed) {
+    const retryAfter =
+      secondsUntilReset || rateLimitConfig.replySummary.windowMs / 1000;
+    res.setHeader("Retry-After", retryAfter.toString());
+    return res.status(429).json({
+      error: "Rate limit exceeded",
+      message: `You've reached the limit of ${
+        rateLimitConfig.replySummary.maxRequests
+      } reply summaries in ${Math.round(
+        rateLimitConfig.replySummary.windowMs / 60000
+      )} minutes. Please wait ${Math.ceil(retryAfter / 60)} minutes and try again.`,
+      retryAfter,
+    });
   }
 
   try {

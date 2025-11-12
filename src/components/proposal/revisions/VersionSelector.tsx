@@ -34,6 +34,7 @@ interface VersionSelectorProps {
   onSummarizeChanges: () => void;
   revisionSummary: string | null;
   revisionSummaryLoading: boolean;
+  revisionSummaryError?: string;
   onHideSummary: () => void;
   versionDiffHtml?: string;
   embedded?: boolean;
@@ -49,6 +50,7 @@ export default function VersionSelector({
   onSummarizeChanges,
   revisionSummary,
   revisionSummaryLoading,
+  revisionSummaryError = "",
   onHideSummary,
   versionDiffHtml,
   embedded = false,
@@ -157,6 +159,11 @@ export default function VersionSelector({
         )}
 
         {/* Revision Summary */}
+        {revisionSummaryError && (
+          <Alert className="bg-red-50 border-red-200 text-red-900">
+            <AlertDescription>{revisionSummaryError}</AlertDescription>
+          </Alert>
+        )}
         {revisionSummary && (
           <>
             <Alert className="bg-purple-50 border-purple-200">

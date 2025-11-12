@@ -28,6 +28,7 @@ import {
   MessagesSquare,
 } from "lucide-react";
 import { ProposalFrontmatter } from "@/lib/utils/metadata";
+import { buildRateLimitMessage } from "@/lib/utils/rateLimit";
 
 interface ProposalDetail {
   id: number;
@@ -115,13 +116,18 @@ export default function ProposalDetail() {
   const [revisionsLoading, setRevisionsLoading] = useState(false);
   const [proposalSummary, setProposalSummary] = useState<string | null>(null);
   const [proposalSummaryLoading, setProposalSummaryLoading] = useState(false);
+  const [proposalSummaryError, setProposalSummaryError] = useState("");
   const [revisionSummary, setRevisionSummary] = useState<string | null>(null);
   const [revisionSummaryLoading, setRevisionSummaryLoading] = useState(false);
+  const [revisionSummaryError, setRevisionSummaryError] = useState("");
   const [replySummaries, setReplySummaries] = useState<Record<number, string>>(
     {}
   );
   const [replySummaryLoading, setReplySummaryLoading] = useState<
     Record<number, boolean>
+  >({});
+  const [replySummaryErrors, setReplySummaryErrors] = useState<
+    Record<number, string>
   >({});
   const [discussionSummary, setDiscussionSummary] = useState<string | null>(
     null
@@ -290,9 +296,28 @@ export default function ProposalDetail() {
     }
   };
 
+  const parseErrorResponse = async (
+    response: Response,
+    defaultMessage: string
+  ) => {
+    try {
+      const data = await response.json();
+      if (response.status === 429) {
+        return buildRateLimitMessage(response, data?.retryAfter ?? null);
+      }
+      return data?.message || data?.error || defaultMessage;
+    } catch {
+      if (response.status === 429) {
+        return buildRateLimitMessage(response);
+      }
+      return defaultMessage;
+    }
+  };
+
   const fetchProposalSummary = async () => {
     if (!id) return;
     setProposalSummaryLoading(true);
+    setProposalSummaryError("");
     try {
       const response = await fetch(`/api/proposals/${id}/summarize`, {
         method: "POST",
@@ -300,11 +325,22 @@ export default function ProposalDetail() {
       if (response.ok) {
         const data: SummaryResponse = await response.json();
         setProposalSummary(data.summary);
+        setProposalSummaryError("");
       } else {
-        console.error("Failed to fetch proposal summary");
+        const message = await parseErrorResponse(
+          response,
+          "Failed to fetch proposal summary"
+        );
+        setProposalSummaryError(message);
+        console.error(message);
       }
     } catch (error) {
       console.error("Error fetching proposal summary:", error);
+      setProposalSummaryError(
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch proposal summary"
+      );
     } finally {
       setProposalSummaryLoading(false);
     }
@@ -313,6 +349,7 @@ export default function ProposalDetail() {
   const fetchRevisionSummary = async () => {
     if (!id) return;
     setRevisionSummaryLoading(true);
+    setRevisionSummaryError("");
     try {
       const response = await fetch(`/api/proposals/${id}/revisions/summarize`, {
         method: "POST",
@@ -320,11 +357,22 @@ export default function ProposalDetail() {
       if (response.ok) {
         const data: SummaryResponse = await response.json();
         setRevisionSummary(data.summary);
+        setRevisionSummaryError("");
       } else {
-        console.error("Failed to fetch revision summary");
+        const message = await parseErrorResponse(
+          response,
+          "Failed to fetch revision summary"
+        );
+        setRevisionSummaryError(message);
+        console.error(message);
       }
     } catch (error) {
       console.error("Error fetching revision summary:", error);
+      setRevisionSummaryError(
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch revision summary"
+      );
     } finally {
       setRevisionSummaryLoading(false);
     }
@@ -332,6 +380,7 @@ export default function ProposalDetail() {
 
   const fetchReplySummary = async (replyId: number) => {
     setReplySummaryLoading((prev) => ({ ...prev, [replyId]: true }));
+    setReplySummaryErrors((prev) => ({ ...prev, [replyId]: "" }));
     try {
       const response = await fetch(
         `/api/discourse/replies/${replyId}/summarize`,
@@ -342,11 +391,24 @@ export default function ProposalDetail() {
       if (response.ok) {
         const data: SummaryResponse = await response.json();
         setReplySummaries((prev) => ({ ...prev, [replyId]: data.summary }));
+        setReplySummaryErrors((prev) => ({ ...prev, [replyId]: "" }));
       } else {
-        console.error("Failed to fetch reply summary");
+        const message = await parseErrorResponse(
+          response,
+          "Failed to fetch reply summary"
+        );
+        setReplySummaryErrors((prev) => ({ ...prev, [replyId]: message }));
+        console.error(message);
       }
     } catch (error) {
       console.error("Error fetching reply summary:", error);
+      setReplySummaryErrors((prev) => ({
+        ...prev,
+        [replyId]:
+          error instanceof Error
+            ? error.message
+            : "Failed to fetch reply summary",
+      }));
     } finally {
       setReplySummaryLoading((prev) => ({ ...prev, [replyId]: false }));
     }
@@ -382,14 +444,19 @@ export default function ProposalDetail() {
         method: "POST",
       });
       if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to generate summary");
+        const message = await parseErrorResponse(
+          response,
+          "Failed to generate summary"
+        );
+        throw new Error(message);
       }
       const data: SummaryResponse = await response.json();
       setDiscussionSummary(data.summary);
       setDiscussionSummaryVisible(true);
     } catch (err: any) {
-      setDiscussionSummaryError(err.message || "Failed to generate summary");
+      setDiscussionSummaryError(
+        err instanceof Error ? err.message : "Failed to generate summary"
+      );
     } finally {
       setDiscussionSummaryLoading(false);
     }
@@ -507,6 +574,7 @@ export default function ProposalDetail() {
                 onToggleExpand={setIsContentExpanded}
                 proposalSummary={proposalSummary}
                 proposalSummaryLoading={proposalSummaryLoading}
+                proposalSummaryError={proposalSummaryError}
                 onFetchProposalSummary={fetchProposalSummary}
                 onHideProposalSummary={() => setProposalSummary(null)}
                 showRevisions={showRevisions}
@@ -523,14 +591,22 @@ export default function ProposalDetail() {
                 onSummarizeChanges={fetchRevisionSummary}
                 revisionSummary={revisionSummary}
                 revisionSummaryLoading={revisionSummaryLoading}
+                revisionSummaryError={revisionSummaryError}
                 onHideRevisionSummary={() => setRevisionSummary(null)}
               />
             </Card>
 
             {proposal.replies && proposal.replies.length > 0 && (
               <Card className="rounded-2xl border-border/60 shadow-sm">
-                <div className="sticky top-16 z-20 bg-card border-b">
-                  <CardHeader className="pb-4">
+                <div
+                  className={`sticky top-16 z-20 bg-card shadow-[0_2px_8px_rgba(0,0,0,0.08)] ${
+                    showReplies ||
+                    (discussionSummary && discussionSummaryVisible)
+                      ? "rounded-t-2xl"
+                      : "rounded-2xl"
+                  }`}
+                >
+                  <CardHeader className="pb-5">
                     <div className="flex items-center justify-between flex-wrap gap-4">
                       <div className="flex items-center gap-3">
                         <div className="flex items-center gap-2 text-base font-semibold">
@@ -588,19 +664,16 @@ export default function ProposalDetail() {
                         </Button>
                       </div>
                     </div>
+                    {discussionSummaryError && (
+                      <Alert variant="destructive" className="mt-4">
+                        <AlertCircle className="h-4 w-4" />
+                        <AlertDescription>
+                          {discussionSummaryError}
+                        </AlertDescription>
+                      </Alert>
+                    )}
                   </CardHeader>
                 </div>
-
-                {discussionSummaryError && (
-                  <div className="px-6 pt-4">
-                    <Alert variant="destructive">
-                      <AlertCircle className="h-4 w-4" />
-                      <AlertDescription>
-                        {discussionSummaryError}
-                      </AlertDescription>
-                    </Alert>
-                  </div>
-                )}
 
                 {(showReplies ||
                   (discussionSummary && discussionSummaryVisible)) && (
@@ -634,6 +707,7 @@ export default function ProposalDetail() {
                               <div className="flex justify-between items-start mb-3 text-sm text-muted-foreground">
                                 <div className="flex items-center gap-3">
                                   {reply.avatar_template ? (
+                                    /* eslint-disable-next-line @next/next/no-img-element */
                                     <img
                                       src={`https://gov.near.org${reply.avatar_template.replace(
                                         "{size}",
@@ -716,16 +790,25 @@ export default function ProposalDetail() {
                               />
 
                               {!replySummaries[reply.id] ? (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => fetchReplySummary(reply.id)}
-                                  disabled={replySummaryLoading[reply.id]}
-                                >
-                                  {replySummaryLoading[reply.id]
-                                    ? "Summarizing..."
-                                    : "Summarize"}
-                                </Button>
+                                <>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => fetchReplySummary(reply.id)}
+                                    disabled={replySummaryLoading[reply.id]}
+                                  >
+                                    {replySummaryLoading[reply.id]
+                                      ? "Summarizing..."
+                                      : "Summarize"}
+                                  </Button>
+                                  {replySummaryErrors[reply.id] && (
+                                    <Alert className="bg-red-50 border-red-200 text-red-900 mt-3">
+                                      <AlertDescription>
+                                        {replySummaryErrors[reply.id]}
+                                      </AlertDescription>
+                                    </Alert>
+                                  )}
+                                </>
                               ) : (
                                 <Alert className="bg-orange-50 border-orange-200 mt-3">
                                   <AlertDescription>
@@ -742,6 +825,11 @@ export default function ProposalDetail() {
                                             const newSummaries = { ...prev };
                                             delete newSummaries[reply.id];
                                             return newSummaries;
+                                          });
+                                          setReplySummaryErrors((prev) => {
+                                            const next = { ...prev };
+                                            delete next[reply.id];
+                                            return next;
                                           });
                                         }}
                                       >

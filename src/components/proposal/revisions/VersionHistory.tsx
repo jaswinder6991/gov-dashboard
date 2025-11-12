@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Evaluation } from "@/types/evaluation";
 import { ScreeningBadge } from "@/components/proposal/screening/ScreeningBadge";
 import { reconstructRevisionContent } from "@/lib/utils/revisionContentUtils";
-import { sanitizeHtml, stripHtml } from "@/lib/utils/htmlUtils";
+import { sanitizeHtml, stripHtml } from "@/lib/utils/html-utils";
 import {
   Card,
   CardContent,

@@ -7,7 +7,10 @@ import { ProposalForm } from "@/components/proposal/ProposalForm";
 import { ScreeningResults } from "@/components/proposal/screening/ScreeningResults";
 import { ScreeningBadge } from "@/components/proposal/screening/ScreeningBadge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertCircle, CheckCircle, AlertTriangle } from "lucide-react";
+import {
+  buildRateLimitMessage,
+  extractRateLimitInfo,
+} from "@/lib/utils/rateLimit";
 
 export default function NewProposalPage() {
   const { signedAccountId } = useNear();
@@ -17,6 +20,9 @@ export default function NewProposalPage() {
   const [result, setResult] = useState<Evaluation | null>(null);
   const [error, setError] = useState("");
   const [remainingEvaluations, setRemainingEvaluations] = useState<
+    number | null
+  >(null);
+  const [rateLimitResetSeconds, setRateLimitResetSeconds] = useState<
     number | null
   >(null);
 
@@ -39,20 +45,25 @@ export default function NewProposalPage() {
         body: JSON.stringify({ title, content: proposal }),
       });
 
-      // Get rate limit info from headers
-      const remaining = response.headers.get("X-RateLimit-Remaining");
-      if (remaining) {
-        setRemainingEvaluations(parseInt(remaining));
-      }
+      const rateLimit = extractRateLimitInfo(response);
+      setRemainingEvaluations(
+        typeof rateLimit.remaining === "number" ? rateLimit.remaining : null
+      );
+      setRateLimitResetSeconds(rateLimit.resetSeconds);
 
       if (!response.ok) {
-        const errorData = await response.json();
+        let errorData: any = {};
+        try {
+          errorData = await response.json();
+        } catch {
+          // ignore malformed JSON
+        }
 
         if (response.status === 429) {
-          const retryMinutes = Math.ceil((errorData.retryAfter || 900) / 60);
-          throw new Error(
-            `Rate limit exceeded. Please try again in ${retryMinutes} minutes or connect your NEAR wallet for unlimited evaluations.`
+          setError(
+            buildRateLimitMessage(response, errorData?.retryAfter ?? null)
           );
+          return;
         }
 
         throw new Error(
@@ -80,21 +91,30 @@ export default function NewProposalPage() {
           </p>
         </div>
 
-        {/* Rate limit info for anonymous users */}
-        {!signedAccountId && remainingEvaluations !== null && (
-          <Alert className="border-green-500 bg-green-50 text-green-900">
+        {/* Rate limit info */}
+        {remainingEvaluations !== null && remainingEvaluations > 0 && (
+          <Alert className="border-blue-500 bg-blue-50 text-blue-900">
             <AlertDescription>
-              {`You have ${remainingEvaluations} free evaluation${
+              {`You can do ${remainingEvaluations} more evaluation${
                 remainingEvaluations !== 1 ? "s" : ""
-              } remaining. Connect your NEAR wallet for unlimited evaluations.`}
+              } in the next ${
+                rateLimitResetSeconds !== null
+                  ? Math.max(1, Math.ceil(rateLimitResetSeconds / 60))
+                  : 15
+              } minute${
+                rateLimitResetSeconds !== null &&
+                Math.max(1, Math.ceil(rateLimitResetSeconds / 60)) !== 1
+                  ? "s"
+                  : ""
+              }.`}
             </AlertDescription>
           </Alert>
         )}
 
-        {signedAccountId && (
-          <div className="rounded-lg border p-4 bg-green-50 text-green-900">
-            Connected as <strong>{signedAccountId}</strong>
-          </div>
+        {error && (
+          <Alert className="border-red-500 bg-red-50 text-red-900">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
 
         <div className="rounded-lg border p-6 bg-card">
@@ -107,12 +127,6 @@ export default function NewProposalPage() {
             loading={loading}
           />
         </div>
-
-        {error && (
-          <div className="rounded-lg border border-destructive px-4 py-3 text-destructive bg-destructive/10">
-            {error}
-          </div>
-        )}
 
         {result && (
           <>

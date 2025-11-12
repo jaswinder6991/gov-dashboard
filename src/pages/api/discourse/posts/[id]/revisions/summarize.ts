@@ -4,6 +4,15 @@ import {
   CacheKeys,
 } from "../../../../../../lib/utils/cache-utils";
 import { buildRevisionAnalysisPrompt } from "@/lib/prompts/summarizeRevisions";
+import {
+  createRateLimiter,
+  getClientIdentifier,
+} from "@/lib/server/rateLimiter";
+import { rateLimitConfig } from "@/lib/config/rateLimit";
+
+const postRevisionLimiter = createRateLimiter(
+  rateLimitConfig.postRevisions
+);
 
 // TypeScript type definitions for Discourse API
 interface RevisionBodyChange {
@@ -59,6 +68,32 @@ export default async function handler(
 
   if (!id || typeof id !== "string") {
     return res.status(400).json({ error: "Invalid post ID" });
+  }
+
+  const clientId = getClientIdentifier(req);
+  const { allowed, remaining, resetTime } = postRevisionLimiter.check(clientId);
+  const secondsUntilReset = Math.max(
+    0,
+    Math.ceil((resetTime - Date.now()) / 1000)
+  );
+
+  res.setHeader("X-RateLimit-Remaining", Math.max(remaining, 0).toString());
+  res.setHeader("X-RateLimit-Limit", postRevisionLimiter.limit.toString());
+  res.setHeader("X-RateLimit-Reset", secondsUntilReset.toString());
+
+  if (!allowed) {
+    const retryAfter =
+      secondsUntilReset || rateLimitConfig.postRevisions.windowMs / 1000;
+    res.setHeader("Retry-After", retryAfter.toString());
+    return res.status(429).json({
+      error: "Rate limit exceeded",
+      message: `You've reached the limit of ${
+        rateLimitConfig.postRevisions.maxRequests
+      } post revision summaries in ${Math.round(
+        rateLimitConfig.postRevisions.windowMs / 60000
+      )} minutes. Please wait ${Math.ceil(retryAfter / 60)} minutes and try again.`,
+      retryAfter,
+    });
   }
 
   try {

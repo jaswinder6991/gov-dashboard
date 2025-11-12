@@ -2,6 +2,15 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { proposalCache, CacheKeys } from "../../../../lib/utils/cache-utils";
 import { buildProposalSummaryPrompt } from "@/lib/prompts/summarizeProposal";
 import { stripFrontmatter } from "@/lib/utils/metadata";
+import {
+  createRateLimiter,
+  getClientIdentifier,
+} from "@/lib/server/rateLimiter";
+import { rateLimitConfig } from "@/lib/config/rateLimit";
+
+const proposalSummarizeLimiter = createRateLimiter(
+  rateLimitConfig.proposalSummary
+);
 
 /**
  * POST /api/proposals/[id]/summarize
@@ -27,6 +36,36 @@ export default async function handler(
 
   if (!id || typeof id !== "string") {
     return res.status(400).json({ error: "Invalid proposal ID" });
+  }
+
+  const clientId = getClientIdentifier(req);
+  const { allowed, remaining, resetTime } =
+    proposalSummarizeLimiter.check(clientId);
+  const secondsUntilReset = Math.max(
+    0,
+    Math.ceil((resetTime - Date.now()) / 1000)
+  );
+
+  res.setHeader("X-RateLimit-Remaining", Math.max(remaining, 0).toString());
+  res.setHeader(
+    "X-RateLimit-Limit",
+    proposalSummarizeLimiter.limit.toString()
+  );
+  res.setHeader("X-RateLimit-Reset", secondsUntilReset.toString());
+
+  if (!allowed) {
+    const retryAfter =
+      secondsUntilReset || rateLimitConfig.proposalSummary.windowMs / 1000;
+    res.setHeader("Retry-After", retryAfter.toString());
+    return res.status(429).json({
+      error: "Rate limit exceeded",
+      message: `You've reached the limit of ${
+        rateLimitConfig.proposalSummary.maxRequests
+      } proposal summaries in ${Math.round(
+        rateLimitConfig.proposalSummary.windowMs / 60000
+      )} minutes. Please wait ${Math.ceil(retryAfter / 60)} minutes and try again.`,
+      retryAfter,
+    });
   }
 
   try {

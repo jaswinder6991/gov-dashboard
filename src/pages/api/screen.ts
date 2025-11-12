@@ -6,6 +6,10 @@ import {
   requestEvaluation,
   respondWithScreeningError,
 } from "@/lib/server/screening";
+import { createRateLimiter } from "@/lib/server/rateLimiter";
+import { rateLimitConfig } from "@/lib/config/rateLimit";
+
+const screenLimiter = createRateLimiter(rateLimitConfig.screen);
 
 /**
  * POST /api/screen
@@ -13,41 +17,6 @@ import {
  * Authenticated screening endpoint - evaluates proposals WITHOUT saving.
  * Requires NEAR wallet signature for authentication (NEP-413).
  */
-
-// Simple in-memory rate limiter
-const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT_WINDOW = 15 * 60 * 1000; // 15 minutes
-const RATE_LIMIT_MAX_REQUESTS = 5;
-
-function checkRateLimit(key: string): { allowed: boolean; resetTime?: number } {
-  const now = Date.now();
-  const record = rateLimitMap.get(key);
-
-  if (!record || now > record.resetTime) {
-    rateLimitMap.set(key, {
-      count: 1,
-      resetTime: now + RATE_LIMIT_WINDOW,
-    });
-    return { allowed: true };
-  }
-
-  if (record.count >= RATE_LIMIT_MAX_REQUESTS) {
-    return { allowed: false, resetTime: record.resetTime };
-  }
-
-  record.count++;
-  return { allowed: true };
-}
-
-// Cleanup old entries periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, record] of rateLimitMap.entries()) {
-    if (now > record.resetTime) {
-      rateLimitMap.delete(key);
-    }
-  }
-}, 60 * 1000);
 
 export default async function handler(
   req: NextApiRequest,
@@ -71,19 +40,25 @@ export default async function handler(
 
   const nearAddress = verificationResult.accountId;
 
-  // Check rate limit (by NEAR address)
-  const { allowed, resetTime } = checkRateLimit(nearAddress);
+  // Apply rate limit per NEAR account
+  const { allowed, remaining, resetTime } = screenLimiter.check(nearAddress);
+  const secondsUntilReset = Math.max(
+    0,
+    Math.ceil((resetTime - Date.now()) / 1000)
+  );
+  res.setHeader("X-RateLimit-Remaining", Math.max(remaining, 0).toString());
+  res.setHeader("X-RateLimit-Limit", screenLimiter.limit.toString());
+  res.setHeader("X-RateLimit-Reset", secondsUntilReset.toString());
 
   if (!allowed) {
-    const retryAfter = resetTime
-      ? Math.ceil((resetTime - Date.now()) / 1000)
-      : 60;
+    const retryAfter =
+      secondsUntilReset || rateLimitConfig.screen.windowMs / 1000;
     res.setHeader("Retry-After", retryAfter.toString());
     return res.status(429).json({
       error: "Too many requests",
-      message: `Rate limit exceeded. Please try again in ${Math.ceil(
+      message: `Rate limit exceeded for ${nearAddress}. Please wait ${Math.ceil(
         retryAfter / 60
-      )} minutes.`,
+      )} minutes and try again.`,
       retryAfter,
     });
   }

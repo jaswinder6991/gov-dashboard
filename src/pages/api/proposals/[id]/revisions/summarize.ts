@@ -1,7 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { revisionCache, CacheKeys } from "../../../../../lib/utils/cache-utils";
 import { buildRevisionAnalysisPrompt } from "@/lib/prompts/summarizeRevisions";
-import { stripHtml } from "@/lib/utils/htmlUtils";
+import { stripHtml } from "@/lib/utils/html-utils";
+import {
+  createRateLimiter,
+  getClientIdentifier,
+} from "@/lib/server/rateLimiter";
+import { rateLimitConfig } from "@/lib/config/rateLimit";
+
+const proposalRevisionLimiter = createRateLimiter(
+  rateLimitConfig.proposalRevisions
+);
 
 // TypeScript type definitions for Discourse API
 interface RevisionBodyChange {
@@ -49,6 +58,35 @@ export default async function handler(
 
   if (!id || typeof id !== "string") {
     return res.status(400).json({ error: "Invalid topic ID" });
+  }
+
+  const clientId = getClientIdentifier(req);
+  const { allowed, remaining, resetTime } =
+    proposalRevisionLimiter.check(clientId);
+  const secondsUntilReset = Math.max(
+    0,
+    Math.ceil((resetTime - Date.now()) / 1000)
+  );
+
+  res.setHeader("X-RateLimit-Remaining", Math.max(remaining, 0).toString());
+  res.setHeader("X-RateLimit-Limit", proposalRevisionLimiter.limit.toString());
+  res.setHeader("X-RateLimit-Reset", secondsUntilReset.toString());
+
+  if (!allowed) {
+    const retryAfter =
+      secondsUntilReset || rateLimitConfig.proposalRevisions.windowMs / 1000;
+    res.setHeader("Retry-After", retryAfter.toString());
+    return res.status(429).json({
+      error: "Rate limit exceeded",
+      message: `You've reached the limit of ${
+        rateLimitConfig.proposalRevisions.maxRequests
+      } revision summaries in ${Math.round(
+        rateLimitConfig.proposalRevisions.windowMs / 60000
+      )} minutes. Please wait ${Math.ceil(
+        retryAfter / 60
+      )} minutes and try again.`,
+      retryAfter,
+    });
   }
 
   try {

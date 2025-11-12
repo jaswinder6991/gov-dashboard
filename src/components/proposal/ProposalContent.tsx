@@ -35,6 +35,7 @@ interface ProposalContentProps {
   onToggleExpand: (expanded: boolean) => void;
   proposalSummary: string | null;
   proposalSummaryLoading: boolean;
+  proposalSummaryError?: string;
   onFetchProposalSummary: () => void;
   onHideProposalSummary: () => void;
   showRevisions: boolean;
@@ -51,6 +52,7 @@ interface ProposalContentProps {
   onSummarizeChanges?: () => void;
   revisionSummary?: string | null;
   revisionSummaryLoading?: boolean;
+  revisionSummaryError?: string;
   onHideRevisionSummary?: () => void;
 }
 
@@ -61,6 +63,7 @@ export default function ProposalContent({
   onToggleExpand,
   proposalSummary,
   proposalSummaryLoading,
+  proposalSummaryError,
   onFetchProposalSummary,
   onHideProposalSummary,
   showRevisions,
@@ -77,6 +80,7 @@ export default function ProposalContent({
   onSummarizeChanges,
   revisionSummary,
   revisionSummaryLoading,
+  revisionSummaryError,
   onHideRevisionSummary,
 }: ProposalContentProps) {
   const renderedContent = useMemo(() => {
@@ -111,8 +115,8 @@ export default function ProposalContent({
         }
       `}</style>
       <div className="sticky top-16 z-30">
-        <div className="bg-card border-b">
-          <CardHeader className="pb-3">
+        <div className="bg-card rounded-t-2xl shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
+          <CardHeader className="pb-5">
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-3 min-h-[40px]">
                 <CardTitle className="flex items-center gap-2">
@@ -173,6 +177,11 @@ export default function ProposalContent({
                 </Button>
               </div>
             </div>
+            {proposalSummaryError && (
+              <Alert className="mt-4 border-red-300 bg-red-50 text-red-900">
+                <AlertDescription>{proposalSummaryError}</AlertDescription>
+              </Alert>
+            )}
           </CardHeader>
         </div>
       </div>
@@ -190,6 +199,7 @@ export default function ProposalContent({
             onSummarizeChanges={() => onSummarizeChanges?.()}
             revisionSummary={revisionSummary ?? null}
             revisionSummaryLoading={!!revisionSummaryLoading}
+            revisionSummaryError={revisionSummaryError ?? ""}
             onHideSummary={() => onHideRevisionSummary?.()}
             versionDiffHtml={versionDiffHtml}
           />

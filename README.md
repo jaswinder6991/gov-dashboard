@@ -1,13 +1,11 @@
 # NEAR Governance Dashboard
 
+[neargov.ai](https://neargov.ai)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)](https://www.typescriptlang.org/)
 
-[neargov.ai](https://neargov.ai)
-
-> Built on [NEAR AI](https://near.ai), this open web application supports analysis of governance proposals based on the necessary context.
-
----
+Built on [NEAR AI](https://near.ai), this web application supports analysis of governance proposals and related forum discussions.
 
 ## Table of Contents
 
@@ -246,11 +244,12 @@ const response = await fetch(`/api/saveAnalysis/${topicId}`, {
 
 ### Rate Limiting
 
-Simple in-memory rate limiter by NEAR account:
+Each API endpoint enforces an in-memory quota:
 
-- 5 requests per 15 minutes
-- Separate limit per account
-- Returns `429 Too Many Requests` with `Retry-After` header
+- Default: 5 requests per endpoint within 15 minutes
+- Counted per NEAR account if connected, or per IP if anonymous
+- If exceeded, returns `429 Too Many Requests` with `Retry-After`
+- Responses include `X-RateLimit-Remaining`, `X-RateLimit-Limit`, and `X-RateLimit-Reset`
 
 ## Caching Strategy
 
