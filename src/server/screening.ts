@@ -1,5 +1,10 @@
 import type { NextApiResponse } from "next";
 import type { Evaluation } from "@/types/evaluation";
+import type { VerificationMetadata } from "@/types/agui-events";
+import {
+  extractVerificationMetadata,
+  normalizeVerificationPayload,
+} from "@/utils/verification";
 import { buildScreeningPrompt } from "@/lib/prompts/screenProposal";
 import {
   verify,
@@ -123,10 +128,16 @@ export async function verifyNearAuth(
   }
 }
 
+export interface EvaluationRequestResult {
+  evaluation: Evaluation;
+  verification?: VerificationMetadata;
+  verificationId?: string;
+}
+
 export async function requestEvaluation(
   title: string,
   content: string
-): Promise<Evaluation> {
+): Promise<EvaluationRequestResult> {
   const apiKey = process.env.NEAR_AI_CLOUD_API_KEY;
   if (!apiKey) {
     throw new ScreeningError(500, "AI API not configured");
@@ -197,7 +208,19 @@ export async function requestEvaluation(
     );
   }
 
-  return evaluation;
+  const verificationRaw = extractVerificationMetadata(data);
+  const verificationMessageId =
+    data?.id ?? data?.choices?.[0]?.id ?? undefined;
+  const { verification, verificationId } = normalizeVerificationPayload(
+    verificationRaw,
+    verificationMessageId
+  );
+
+  return {
+    evaluation,
+    verification,
+    verificationId: verificationId ?? undefined,
+  };
 }
 
 export function respondWithScreeningError(

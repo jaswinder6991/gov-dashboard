@@ -181,11 +181,14 @@ async function ensureInitialized() {
 
         try {
           const { wallet, accounts } = await nearConnector.getConnectedWallet();
-          if (wallet && accounts?.length > 0) {
+          if (wallet && accounts?.length) {
             syncWalletState(wallet, accounts[0].accountId);
           }
         } catch (error) {
-          // Expected when no wallet connected
+          // Expected when no wallet is connected yet
+          if (process.env.NODE_ENV !== "production") {
+            console.debug("NEAR wallet rehydrate skipped:", error);
+          }
         }
 
         success = true; // ✅ Mark successful initialization

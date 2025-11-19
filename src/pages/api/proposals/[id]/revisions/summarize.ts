@@ -12,6 +12,10 @@ import type {
 } from "@/types/discourse";
 import type { ApiErrorResponse } from "@/types/api";
 import type { ProposalRevisionSummaryResponse } from "@/types/summaries";
+import {
+  extractVerificationMetadata,
+  normalizeVerificationPayload,
+} from "@/utils/verification";
 
 const proposalRevisionLimiter = createRateLimiter(
   rateLimitConfig.proposalRevisions
@@ -265,6 +269,7 @@ export default async function handler(
       truncatedTimeline
     );
 
+    const model = "deepseek-ai/DeepSeek-V3.1";
     const summaryResponse = await fetch(
       "https://cloud-api.near.ai/v1/chat/completions",
       {
@@ -274,7 +279,7 @@ export default async function handler(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "deepseek-ai/DeepSeek-V3.1",
+          model,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.4,
           max_tokens: 800,
@@ -288,6 +293,11 @@ export default async function handler(
 
     const data = await summaryResponse.json();
     const summary: string = data.choices[0]?.message?.content ?? "";
+    const rawVerification = extractVerificationMetadata(data);
+    const { verification, verificationId } = normalizeVerificationPayload(
+      rawVerification,
+      data?.id || data?.choices?.[0]?.id
+    );
 
     if (!summary) {
       throw new Error("Empty summary returned from AI");
@@ -317,6 +327,9 @@ export default async function handler(
       truncated: revisionTimeline.length > MAX_LENGTH,
       generatedAt: Date.now(),
       cached: false,
+      model,
+      verification,
+      verificationId,
     };
 
     // ===================================================================

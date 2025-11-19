@@ -4,6 +4,23 @@
  * https://docs.agui.org
  */
 
+// Verification Metadata
+export type VerificationStatus = "pending" | "verified" | "failed";
+
+export interface VerificationMetadata {
+  source: "near-ai-cloud";
+  status: VerificationStatus;
+  messageId?: string;
+  nonce?: string;
+  attestationReport?: string;
+  attestationUrl?: string;
+  proof?: unknown;
+  signature?: string;
+  measurement?: string;
+  issuedAt?: string | number;
+  error?: string;
+}
+
 // Event Type Enum
 export enum EventType {
   // Lifecycle Events
@@ -50,6 +67,7 @@ export interface BaseEvent {
   type: EventType;
   timestamp?: number;
   rawEvent?: unknown;
+  verification?: VerificationMetadata;
 }
 
 // ============================================================================

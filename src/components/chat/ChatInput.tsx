@@ -1,0 +1,129 @@
+// components/chat/ChatInput.tsx
+import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from "react";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Loader2, Send, Trash2 } from "lucide-react";
+
+interface ChatInputProps {
+  onSend: (message: string) => void;
+  onClear: () => void;
+  isLoading: boolean;
+  error: string | null;
+  placeholder?: string;
+  disabled?: boolean;
+  canClear?: boolean;
+  onHeightChange?: (height: number) => void;
+}
+
+export const ChatInput = ({
+  onSend,
+  onClear,
+  isLoading,
+  error,
+  placeholder = "Ask me anything...",
+  disabled = false,
+  canClear = false,
+  onHeightChange,
+}: ChatInputProps) => {
+  const [inputValue, setInputValue] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleInputChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    setInputValue(e.target.value);
+    e.target.style.height = "auto";
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+  };
+
+  const handleSend = () => {
+    const message = inputValue.trim();
+    if (!message || isLoading || disabled) return;
+
+    onSend(message);
+    setInputValue("");
+    if (inputRef.current) {
+      inputRef.current.style.height = "auto";
+    }
+  };
+
+  const handleKeyPress = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  useEffect(() => {
+    if (!onHeightChange) return;
+    const node = containerRef.current;
+    if (!node) return;
+
+    const notify = () => onHeightChange(node.getBoundingClientRect().height);
+    notify();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", notify);
+      return () => window.removeEventListener("resize", notify);
+    }
+
+    const observer = new ResizeObserver(() => notify());
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [onHeightChange]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="fixed bottom-0 left-0 right-0 border-t bg-background/95 px-4 sm:px-6 py-6 sm:py-8 backdrop-blur supports-[backdrop-filter]:bg-background/85 z-20 shadow-[0_-8px_24px_rgba(0,0,0,0.08)]"
+    >
+      <div className="max-w-4xl mx-auto space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold leading-tight mb-3">
+            NEAR Gov Assistant
+          </h2>
+        </div>
+
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {/* Input */}
+        <div className="flex gap-5 pb-2">
+          <textarea
+            ref={inputRef}
+            value={inputValue}
+            onChange={handleInputChange}
+            onKeyPress={handleKeyPress}
+            placeholder={placeholder}
+            disabled={isLoading || disabled}
+            className="flex-1 max-h-[120px] resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 shadow-sm"
+            rows={1}
+          />
+          <Button
+            onClick={handleSend}
+            disabled={isLoading || !inputValue.trim() || disabled}
+            size="icon"
+            className="shadow-sm"
+          >
+            {isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={onClear}
+            disabled={isLoading || !canClear}
+            className="shadow-sm"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};

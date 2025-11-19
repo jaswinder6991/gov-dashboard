@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useNear } from "@/hooks/useNear";
 import type { Evaluation } from "@/types/evaluation";
+import type { VerificationMetadata } from "@/types/agui-events";
 import { ProposalForm } from "@/components/proposal/ProposalForm";
 import { ScreeningResults } from "@/components/proposal/screening/ScreeningResults";
 import { ScreeningBadge } from "@/components/proposal/screening/ScreeningBadge";
@@ -19,6 +20,9 @@ export default function NewProposalPage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<Evaluation | null>(null);
   const [error, setError] = useState("");
+  const [verificationMeta, setVerificationMeta] =
+    useState<VerificationMetadata | null>(null);
+  const [verificationId, setVerificationId] = useState<string | null>(null);
   const [remainingEvaluations, setRemainingEvaluations] = useState<
     number | null
   >(null);
@@ -35,6 +39,8 @@ export default function NewProposalPage() {
     setLoading(true);
     setError("");
     setResult(null);
+    setVerificationMeta(null);
+    setVerificationId(null);
 
     try {
       const response = await fetch("/api/evaluateDraft", {
@@ -71,8 +77,14 @@ export default function NewProposalPage() {
         );
       }
 
-      const data: { evaluation: Evaluation } = await response.json();
+      const data: {
+        evaluation: Evaluation;
+        verification?: VerificationMetadata | null;
+        verificationId?: string | null;
+      } = await response.json();
       setResult(data.evaluation);
+      setVerificationMeta(data.verification ?? null);
+      setVerificationId(data.verificationId ?? data.verification?.messageId ?? null);
     } catch (err: unknown) {
       console.error("Evaluation error:", err);
       const message =
@@ -157,6 +169,8 @@ export default function NewProposalPage() {
                   qualityScore: result.qualityScore,
                   attentionScore: result.attentionScore,
                 }}
+                verification={verificationMeta ?? undefined}
+                verificationId={verificationId ?? undefined}
               />
             </div>
           </>

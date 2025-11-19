@@ -1,4 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import {
+  extractVerificationMetadata,
+  normalizeVerificationPayload,
+} from "@/utils/verification";
+import { createHash } from "crypto";
+import { registerVerificationSession, updateVerificationHashes } from "@/server/verificationSessions";
 
 type ChatMessage = {
   role: string;
@@ -11,6 +17,7 @@ type ChatCompletionRequestPayload = {
   model: string;
   messages: ChatMessage[];
   stream: boolean;
+  verification?: { id: string; nonce: string };
   temperature?: number;
   max_tokens?: number;
   top_p?: number;
@@ -79,6 +86,8 @@ export default async function handler(
     model,
     messages,
     stream,
+    verificationId,
+    verificationNonce,
     temperature,
     max_tokens,
     top_p,
@@ -126,6 +135,23 @@ export default async function handler(
     if (tools !== undefined) requestBody.tools = tools;
     if (tool_choice !== undefined) requestBody.tool_choice = tool_choice;
 
+    // Hash body BEFORE adding verification (headers carry verification)
+    const requestBodyString = JSON.stringify(requestBody);
+    const requestHash = createHash("sha256").update(requestBodyString).digest("hex");
+
+    const localVerificationData =
+      verificationId && verificationNonce
+        ? { id: verificationId, nonce: verificationNonce }
+        : undefined;
+
+    console.log("[verification] Pre-request:", {
+      verificationId: verificationId || null,
+      nonce: verificationNonce || null,
+      requestHash,
+      requestBodyLength: requestBodyString.length,
+      requestBodyPreview: requestBodyString.substring(0, 100),
+    });
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
 
@@ -136,8 +162,11 @@ export default async function handler(
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
+          ...(verificationId ? { "X-Verification-Id": verificationId } : {}),
+          ...(verificationNonce ? { "X-Nonce": verificationNonce } : {}),
         },
-        body: JSON.stringify(requestBody),
+        // Send the hashed body exactly as NEAR AI will see it (no verification field)
+        body: requestBodyString,
         signal: controller.signal,
       }
     );
@@ -163,47 +192,79 @@ export default async function handler(
       });
     }
 
-    // If streaming, pipe the response
+    // If streaming, pass through exact bytes from NEAR AI
     if (stream && response.body) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
-      res.setHeader("X-Accel-Buffering", "no"); // Disable buffering for nginx
+      res.setHeader("X-Accel-Buffering", "no");
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let rawResponseBuffer = "";
+
+      // Pre-register session with provided verificationId/nonce and requestHash
+      if (verificationId) {
+        registerVerificationSession(
+          verificationId,
+          verificationNonce,
+          requestHash,
+          null
+        );
+      }
 
       try {
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
 
-          const chunk = decoder.decode(value, { stream: true });
-
-          // Forward chunk to client
-          res.write(chunk);
-
-          // Flush immediately for better streaming
-          if (typeof (res as NodeJS.WritableStream & { flush?: () => void }).flush === "function") {
-            (res as NodeJS.WritableStream & { flush?: () => void }).flush?.();
+          if (value) {
+            const chunk = decoder.decode(value, { stream: true });
+            rawResponseBuffer += chunk;
+            // Write exact bytes without modification
+            res.write(chunk);
           }
+
+          if (done) break;
+        }
+
+        const finalChunk = decoder.decode();
+        if (finalChunk) {
+          rawResponseBuffer += finalChunk;
+          res.write(finalChunk);
+        }
+
+        if (verificationId) {
+          console.log("[verification] Stream complete:", {
+            verificationId,
+            rawResponseLength: rawResponseBuffer.length,
+            endsWithNewlines: rawResponseBuffer.endsWith("\n\n"),
+          });
         }
       } catch (streamError) {
         console.error("Stream error:", streamError);
-        // Try to send error to client if stream isn't closed
-        if (!res.writableEnded) {
-          res.write(
-            `data: ${JSON.stringify({ error: "Stream interrupted" })}\n\n`
-          );
-        }
       } finally {
         if (!res.writableEnded) {
           res.end();
         }
       }
+      return;
     } else {
       // Non-streaming response
-      const data = await response.json();
+      const responseText = await response.text();
+      const responseHash = createHash("sha256").update(responseText).digest("hex");
+      const data = JSON.parse(responseText);
+      const rawVerification = extractVerificationMetadata(data);
+      const { verification, verificationId } = normalizeVerificationPayload(
+        rawVerification,
+        data?.id || data?.choices?.[0]?.id
+      );
+      if (verification) {
+        data.verification = verification;
+      }
+      if (verificationId) {
+        data.verificationId = verificationId;
+        registerVerificationSession(verificationId, undefined, requestHash, responseHash);
+      }
       res.status(200).json(data);
     }
   } catch (error: unknown) {

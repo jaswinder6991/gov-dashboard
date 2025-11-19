@@ -11,6 +11,10 @@ import type {
 } from "@/types/discourse";
 import type { ApiErrorResponse } from "@/types/api";
 import type { DiscussionSummaryResponse } from "@/types/summaries";
+import {
+  extractVerificationMetadata,
+  normalizeVerificationPayload,
+} from "@/utils/verification";
 
 const discussionLimiter = createRateLimiter(rateLimitConfig.discussionSummary);
 const DISCOURSE_URL = servicesConfig.discourseBaseUrl;
@@ -253,6 +257,7 @@ ${truncatedOriginal}
       truncatedDiscussion
     );
 
+    const model = "deepseek-ai/DeepSeek-V3.1";
     const summaryResponse = await fetch(
       "https://cloud-api.near.ai/v1/chat/completions",
       {
@@ -262,7 +267,7 @@ ${truncatedOriginal}
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "deepseek-ai/DeepSeek-V3.1",
+          model,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.4,
           max_tokens: 1000,
@@ -276,6 +281,11 @@ ${truncatedOriginal}
 
     const data = await summaryResponse.json();
     const summary: string = data.choices[0]?.message?.content ?? "";
+    const rawVerification = extractVerificationMetadata(data);
+    const { verification, verificationId } = normalizeVerificationPayload(
+      rawVerification,
+      data?.id || data?.choices?.[0]?.id
+    );
 
     if (!summary) {
       throw new Error("Empty summary returned from AI");
@@ -301,6 +311,8 @@ ${truncatedOriginal}
       },
       generatedAt: Date.now(), // For cache age tracking
       cached: false,
+      verification,
+      verificationId,
     };
 
     // ===================================================================

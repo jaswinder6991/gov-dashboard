@@ -3,7 +3,10 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from "next";
-import { requestEvaluation } from "@/server/screening";
+import {
+  requestEvaluation,
+  type EvaluationRequestResult,
+} from "@/server/screening";
 import {
   EventType,
   type AGUIEvent,
@@ -12,6 +15,8 @@ import {
   type ProposalAgentState,
   type ToolChoice,
 } from "@/types/agui-events";
+import type { VerificationMetadata } from "@/types/agui-events";
+import { extractVerificationMetadata } from "@/utils/verification";
 import type { Evaluation } from "@/types/evaluation";
 
 interface AgentRequestBody {
@@ -168,7 +173,10 @@ Failed Quality Criteria: ${
 }
 
 // Screen proposal using shared evaluation helper
-async function screenProposal(title: string, content: string) {
+async function screenProposal(
+  title: string,
+  content: string
+): Promise<EvaluationRequestResult> {
   return requestEvaluation(title, content);
 }
 
@@ -176,9 +184,6 @@ async function screenProposal(title: string, content: string) {
 function generateId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
-
-// Helper to simulate streaming delays
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default async function handler(
   req: NextApiRequest,
@@ -189,9 +194,13 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  // Extract IDs early so they're available in catch block
+  const body = req.body as AgentRequestBody;
+  const thread = body.threadId || generateId("thread");
+  const run = body.runId || generateId("run");
+
   try {
-    const body = req.body as AgentRequestBody;
-    const { messages, threadId, runId: clientRunId, state } = body;
+    const { messages, state } = body;
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({
@@ -212,10 +221,6 @@ export default async function handler(
         .status(500)
         .json({ error: "Missing NEAR_AI_CLOUD_API_KEY environment variable" });
     }
-
-    // Generate IDs
-    const thread = threadId || generateId("thread");
-    const run = clientRunId || generateId("run");
 
     // Current state from frontend
     const currentState = normalizeState(state);
@@ -263,7 +268,10 @@ export default async function handler(
 
     console.log("[Agent] Tool choice:", toolChoice);
 
-    // Direct fetch to NEAR AI Cloud (NON-STREAMING)
+    // Direct fetch to NEAR AI Cloud (STREAMING)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
+
     const nearAIResponse = await fetch(
       "https://cloud-api.near.ai/v1/chat/completions",
       {
@@ -277,10 +285,12 @@ export default async function handler(
           messages: conversationMessages,
           tools: TOOLS,
           tool_choice: toolChoice,
-          stream: false,
+          stream: true,
         }),
+        signal: controller.signal,
       }
     );
+    clearTimeout(timeout);
 
     console.log("[Agent] NEAR AI Response status:", nearAIResponse.status);
 
@@ -294,6 +304,13 @@ export default async function handler(
       return res.status(500).json({
         error: `NEAR AI API error: ${nearAIResponse.status}`,
         details: errorText,
+      });
+    }
+
+    if (!nearAIResponse.body) {
+      console.error("[Agent] Streaming body missing");
+      return res.status(500).json({
+        error: "NEAR AI response missing body",
       });
     }
 
@@ -316,17 +333,263 @@ export default async function handler(
       timestamp: Date.now(),
     });
 
-    // Parse non-streaming response
-    const data = (await nearAIResponse.json()) as {
-      choices?: Array<{ message?: CompletionMessage }>;
-    };
-    const message = data.choices?.[0]?.message;
+    const reader = nearAIResponse.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let done = false;
 
-    if (!message) {
+    const assistantMessageId = generateId("msg");
+    let assistantMessageStarted = false;
+    let assistantContent = "";
+
+    const dedupeChunk = (existing: string, delta: string) => {
+      if (!delta) return "";
+      if (!existing) return delta;
+      let overlap = Math.min(existing.length, delta.length);
+      while (overlap > 0) {
+        if (
+          existing.slice(existing.length - overlap) === delta.slice(0, overlap)
+        ) {
+          return delta.slice(overlap);
+        }
+        overlap -= 1;
+      }
+      return delta;
+    };
+
+    type ToolCallState = {
+      id: string;
+      name: string;
+      args: string;
+      started: boolean;
+    };
+
+    const toolCallStates = new Map<number, ToolCallState>();
+    const toolCallIndexes: number[] = [];
+    let toolStepStarted = false;
+
+    const ensureTextMessageStarted = () => {
+      if (!assistantMessageStarted) {
+        assistantMessageStarted = true;
+        writeEvent({
+          type: EventType.TEXT_MESSAGE_START,
+          messageId: assistantMessageId,
+          role: "assistant",
+          timestamp: Date.now(),
+        });
+      }
+    };
+
+    const ensureToolCallState = (index: number): ToolCallState => {
+      if (!toolCallStates.has(index)) {
+        const newState: ToolCallState = {
+          id: generateId("tool_call"),
+          name: "",
+          args: "",
+          started: false,
+        };
+        toolCallStates.set(index, newState);
+        toolCallIndexes.push(index);
+      }
+      return toolCallStates.get(index)!;
+    };
+
+    const ensureToolStepStarted = () => {
+      if (!toolStepStarted) {
+        toolStepStarted = true;
+        writeEvent({
+          type: EventType.STEP_STARTED,
+          stepName: "execute_tools",
+          timestamp: Date.now(),
+        });
+      }
+    };
+
+    let latestVerification: VerificationMetadata | undefined;
+
+    const handleContentDelta = (
+      content: any,
+      verification?: VerificationMetadata
+    ) => {
+      let text = "";
+      if (typeof content === "string") {
+        text = content;
+      } else if (Array.isArray(content)) {
+        text = content
+          .map((part) =>
+            typeof part === "string"
+              ? part
+              : typeof part?.text === "string"
+              ? part.text
+              : ""
+          )
+          .join("");
+      } else if (content?.text) {
+        text = content.text;
+      }
+
+      if (!text) return;
+      ensureTextMessageStarted();
+      assistantContent += text;
+      writeEvent({
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: assistantMessageId,
+        delta: text,
+        timestamp: Date.now(),
+        verification: verification ?? latestVerification,
+      });
+    };
+
+    const handleToolCallDelta = (
+      toolCallDelta: any,
+      verification?: VerificationMetadata
+    ) => {
+      const index =
+        typeof toolCallDelta.index === "number"
+          ? toolCallDelta.index
+          : toolCallIndexes.length;
+      const state = ensureToolCallState(index);
+
+      if (toolCallDelta.id) {
+        state.id = toolCallDelta.id;
+      }
+
+      if (toolCallDelta.function?.name) {
+        state.name = toolCallDelta.function.name;
+      }
+
+      if (toolCallDelta.function?.arguments) {
+        ensureToolStepStarted();
+        if (!state.started) {
+          state.started = true;
+          writeEvent({
+            type: EventType.TOOL_CALL_START,
+            toolCallId: state.id,
+            toolCallName: state.name || "execute_tool",
+            parentMessageId: null,
+            timestamp: Date.now(),
+            verification: verification ?? latestVerification,
+          });
+        }
+
+        const argsDelta = toolCallDelta.function.arguments;
+        const uniqueDelta = dedupeChunk(state.args, argsDelta);
+        if (uniqueDelta) {
+          state.args += uniqueDelta;
+          writeEvent({
+            type: EventType.TOOL_CALL_ARGS,
+            toolCallId: state.id,
+            delta: uniqueDelta,
+            timestamp: Date.now(),
+            verification: verification ?? latestVerification,
+          });
+        }
+      }
+    };
+
+    let finishReason: string | null = null;
+
+    while (!done) {
+      const { value, done: readerDone } = await reader.read();
+      if (value) {
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIndex: number;
+        while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, newlineIndex).trim();
+          buffer = buffer.slice(newlineIndex + 1);
+
+          if (!line) {
+            continue;
+          }
+
+          if (line.startsWith("data:")) {
+            const data = line.slice(5).trim();
+            if (data === "[DONE]") {
+              done = true;
+              break;
+            }
+
+            try {
+              const parsed = JSON.parse(data);
+              const choice = parsed.choices?.[0];
+              const delta = choice?.delta;
+              const verification = extractVerificationMetadata(parsed, delta);
+
+              if (verification) {
+                latestVerification = verification;
+              }
+
+              if (delta?.content) {
+                handleContentDelta(delta.content, verification);
+              }
+
+              if (Array.isArray(delta?.tool_calls)) {
+                delta.tool_calls.forEach((toolDelta: any) =>
+                  handleToolCallDelta(toolDelta, verification)
+                );
+              }
+
+              if (choice?.finish_reason) {
+                finishReason = choice.finish_reason;
+              }
+            } catch (parseError) {
+              console.error("[Agent] Failed to parse streaming chunk", parseError);
+            }
+          }
+        }
+      }
+
+      if (readerDone) {
+        break;
+      }
+    }
+
+    if (assistantMessageStarted) {
+      writeEvent({
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: assistantMessageId,
+        timestamp: Date.now(),
+        verification: latestVerification,
+      });
+    }
+
+    toolCallStates.forEach((state) => {
+      if (state.started) {
+        writeEvent({
+          type: EventType.TOOL_CALL_END,
+          toolCallId: state.id,
+          timestamp: Date.now(),
+          verification: latestVerification,
+        });
+      }
+    });
+
+    const aggregatedToolCalls = toolCallIndexes
+      .map((index) => toolCallStates.get(index))
+      .filter((state): state is ToolCallState => Boolean(state))
+      .map((state) => ({
+        id: state.id,
+        type: "function",
+        function: {
+          name: state.name,
+          arguments: state.args,
+        },
+      }));
+
+    const message: CompletionMessage = {
+      content: assistantContent || undefined,
+      tool_calls: aggregatedToolCalls.length ? aggregatedToolCalls : undefined,
+    };
+
+    if (
+      !message.content &&
+      (!message.tool_calls || message.tool_calls.length === 0) &&
+      finishReason !== "tool_calls"
+    ) {
       writeEvent({
         type: EventType.RUN_ERROR,
-        message: "No message in response",
-        code: "NO_MESSAGE",
+        message: "No usable data in streaming response",
+        code: "EMPTY_STREAM",
         timestamp: Date.now(),
       });
 
@@ -340,93 +603,36 @@ export default async function handler(
       return res.end();
     }
 
-    // Handle text content
-    if (message.content) {
-      const messageId = generateId("msg");
-
-      writeEvent({
-        type: EventType.TEXT_MESSAGE_START,
-        messageId,
-        role: "assistant",
-        timestamp: Date.now(),
-      });
-
-      // Simulate streaming by sending content in chunks
-      const content = message.content;
-      const chunkSize = 50;
-      for (let i = 0; i < content.length; i += chunkSize) {
-        writeEvent({
-          type: EventType.TEXT_MESSAGE_CONTENT,
-          messageId,
-          delta: content.slice(i, i + chunkSize),
-          timestamp: Date.now(),
-        });
-        await sleep(15); // Small delay for UX
-      }
-
-      writeEvent({
-        type: EventType.TEXT_MESSAGE_END,
-        messageId,
-        timestamp: Date.now(),
-      });
-    }
-
-    // Handle tool calls
+    // Handle tool calls after streaming completes
     if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-      writeEvent({
-        type: EventType.STEP_STARTED,
-        stepName: "execute_tools",
-        timestamp: Date.now(),
-      });
-
       for (const toolCall of message.tool_calls) {
         const toolCallId = toolCall.id;
         const toolName = toolCall.function.name;
-        const args = JSON.parse(toolCall.function.arguments) as {
-          title: string;
-          content: string;
+        const args = JSON.parse(toolCall.function.arguments || "{}") as {
+          title?: string;
+          content?: string;
         };
 
-        // Emit tool call start
-        writeEvent({
-          type: EventType.TOOL_CALL_START,
-          toolCallId,
-          toolCallName: toolName,
-          parentMessageId: null,
-          timestamp: Date.now(),
-        });
-
-        // Simulate streaming args
-        const argsStr = JSON.stringify(args);
-        const chunkSize = 40;
-        for (let i = 0; i < argsStr.length; i += chunkSize) {
-          writeEvent({
-            type: EventType.TOOL_CALL_ARGS,
-            toolCallId,
-            delta: argsStr.slice(i, i + chunkSize),
-            timestamp: Date.now(),
-          });
-          await sleep(10);
-        }
-
-        writeEvent({
-          type: EventType.TOOL_CALL_END,
-          toolCallId,
-          timestamp: Date.now(),
-        });
-
         // Execute tool
-        let result: Evaluation | { title: string; content: string; status: string } | null = null;
+        let result:
+          | Evaluation
+          | { title: string; content: string; status: string }
+          | null = null;
 
-        if (toolName === "screen_proposal") {
-          result = await screenProposal(args.title, args.content);
+        if (toolName === "screen_proposal" && args.title && args.content) {
+          const screeningResult = await screenProposal(args.title, args.content);
+          result = screeningResult.evaluation;
+
+          if (screeningResult.verification) {
+            latestVerification = screeningResult.verification;
+          }
 
           console.log(
             `[Agent] Screening complete - Quality: ${(
-              result.qualityScore * 100
-            ).toFixed(0)}%, Attention: ${(result.attentionScore * 100).toFixed(
-              0
-            )}%`
+              screeningResult.evaluation.qualityScore * 100
+            ).toFixed(0)}%, Attention: ${(
+              screeningResult.evaluation.attentionScore * 100
+            ).toFixed(0)}%`
           );
 
           writeEvent({
@@ -435,12 +641,13 @@ export default async function handler(
               {
                 op: "replace",
                 path: "/evaluation",
-                value: result,
+                value: screeningResult.evaluation,
               },
             ],
             timestamp: Date.now(),
+            verification: screeningResult.verification ?? latestVerification,
           });
-        } else if (toolName === "write_proposal") {
+        } else if (toolName === "write_proposal" && args.title && args.content) {
           result = {
             title: args.title,
             content: args.content,
@@ -474,14 +681,17 @@ export default async function handler(
           content: JSON.stringify(result, null, 2),
           role: "tool",
           timestamp: Date.now(),
+          verification: latestVerification,
         });
       }
 
-      writeEvent({
-        type: EventType.STEP_FINISHED,
-        stepName: "execute_tools",
-        timestamp: Date.now(),
-      });
+      if (toolStepStarted) {
+        writeEvent({
+          type: EventType.STEP_FINISHED,
+          stepName: "execute_tools",
+          timestamp: Date.now(),
+        });
+      }
     }
 
     // Emit RUN_FINISHED
@@ -495,8 +705,30 @@ export default async function handler(
     res.end();
   } catch (error: unknown) {
     console.error("[Agent] Error:", error);
-    const message =
-      error instanceof Error ? error.message : "Unknown error";
+    const message = error instanceof Error ? error.message : "Unknown error";
+
+    // Helper to write events (redeclared for catch block scope)
+    const writeEvent = (event: AGUIEvent) => {
+      const data = JSON.stringify(event);
+      res.write(`data: ${data}\n\n`);
+    };
+
+    if (error instanceof Error && error.name === "AbortError") {
+      writeEvent({
+        type: EventType.RUN_ERROR,
+        message: "Upstream request timed out",
+        code: "TIMEOUT",
+        timestamp: Date.now(),
+      });
+      writeEvent({
+        type: EventType.RUN_FINISHED,
+        threadId: thread,
+        runId: run,
+        timestamp: Date.now(),
+      });
+      return res.end();
+    }
+
     const errorEvent: AGUIEvent = {
       type: EventType.RUN_ERROR,
       message,

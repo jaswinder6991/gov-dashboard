@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Evaluation } from "@/types/evaluation";
+import type { VerificationMetadata } from "@/types/agui-events";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -14,6 +15,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ChevronDown, CheckCircle2, XCircle, Info } from "lucide-react";
+import { VerificationProof } from "@/components/verification/VerificationProof";
 
 interface ScreeningBadgeProps {
   screening: {
@@ -25,6 +27,8 @@ interface ScreeningBadgeProps {
     qualityScore: number;
     attentionScore: number;
   };
+  verification?: VerificationMetadata;
+  verificationId?: string;
 }
 
 const QUALITY_CRITERIA = [
@@ -79,7 +83,11 @@ const ATTENTION_CRITERIA = [
   },
 ];
 
-export function ScreeningBadge({ screening }: ScreeningBadgeProps) {
+export function ScreeningBadge({
+  screening,
+  verification,
+  verificationId,
+}: ScreeningBadgeProps) {
   const [expandedCriteria, setExpandedCriteria] = useState<Set<string>>(
     new Set()
   );
@@ -266,42 +274,44 @@ export function ScreeningBadge({ screening }: ScreeningBadgeProps) {
                       }}
                     >
                       <Card className={`${qualityColor} h-full`}>
-                        <CollapsibleTrigger className="group w-full cursor-pointer">
-                          <div
-                            className={`flex items-center justify-between p-3 transition-colors rounded-lg ${triggerHover}`}
-                          >
-                            <div className="flex items-center gap-2 font-medium text-sm text-black">
-                              {criterion.label}
-                              <Tooltip>
-                                <TooltipTrigger
-                                  asChild
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  <button
-                                    type="button"
-                                    className="inline-flex items-center justify-center"
+                        <CollapsibleTrigger asChild>
+                          <div className="group w-full cursor-pointer">
+                            <div
+                              className={`flex items-center justify-between p-3 transition-colors rounded-lg ${triggerHover}`}
+                            >
+                              <div className="flex items-center gap-2 font-medium text-sm text-black">
+                                {criterion.label}
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    asChild
+                                    onClick={(e) => e.stopPropagation()}
                                   >
-                                    <Info className="h-3.5 w-3.5 text-black/60 hover:text-black transition-colors" />
-                                  </button>
-                                </TooltipTrigger>
-                                <TooltipContent
-                                  side="top"
-                                  className="max-w-xs text-sm"
+                                    <button
+                                      type="button"
+                                      className="inline-flex items-center justify-center"
+                                    >
+                                      <Info className="h-3.5 w-3.5 text-black/60 hover:text-black transition-colors" />
+                                    </button>
+                                  </TooltipTrigger>
+                                  <TooltipContent
+                                    side="top"
+                                    className="max-w-xs text-sm"
+                                  >
+                                    <p>{criterion.description}</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  variant={
+                                    result.pass ? "success" : "destructive"
+                                  }
+                                  className="pointer-events-none"
                                 >
-                                  <p>{criterion.description}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Badge
-                                variant={
-                                  result.pass ? "success" : "destructive"
-                                }
-                                className="pointer-events-none"
-                              >
-                                {result.pass ? "PASS" : "FAIL"}
-                              </Badge>
-                              <ChevronDown className="h-4 w-4 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+                                  {result.pass ? "PASS" : "FAIL"}
+                                </Badge>
+                                <ChevronDown className="h-4 w-4 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+                              </div>
                             </div>
                           </div>
                         </CollapsibleTrigger>
@@ -377,51 +387,53 @@ export function ScreeningBadge({ screening }: ScreeningBadgeProps) {
                       }}
                     >
                       <Card className={`${scoreColor} h-full`}>
-                        <CollapsibleTrigger className="group w-full cursor-pointer">
-                          <div
-                            className={`flex items-center justify-between p-3 rounded-lg transition-colors ${triggerHover}`}
-                          >
-                            <div className="flex items-center gap-2 font-medium text-sm text-black">
-                              {criterion.label}
-                              <Tooltip>
-                                <TooltipTrigger
-                                  asChild
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  <button
-                                    type="button"
-                                    className="inline-flex items-center justify-center"
+                        <CollapsibleTrigger asChild>
+                          <div className="group w-full cursor-pointer">
+                            <div
+                              className={`flex items-center justify-between p-3 rounded-lg transition-colors ${triggerHover}`}
+                            >
+                              <div className="flex items-center gap-2 font-medium text-sm text-black">
+                                {criterion.label}
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    asChild
+                                    onClick={(e) => e.stopPropagation()}
                                   >
-                                    <Info className="h-3.5 w-3.5 text-black/60 hover:text-black transition-colors" />
-                                  </button>
-                                </TooltipTrigger>
-                                <TooltipContent
-                                  side="top"
-                                  className="max-w-xs text-sm"
+                                    <button
+                                      type="button"
+                                      className="inline-flex items-center justify-center"
+                                    >
+                                      <Info className="h-3.5 w-3.5 text-black/60 hover:text-black transition-colors" />
+                                    </button>
+                                  </TooltipTrigger>
+                                  <TooltipContent
+                                    side="top"
+                                    className="max-w-xs text-sm"
+                                  >
+                                    <p>{criterion.description}</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  variant={
+                                    attentionResult.attentionScore === "high"
+                                      ? "success"
+                                      : attentionResult.attentionScore ===
+                                        "medium"
+                                      ? "secondary"
+                                      : "destructive"
+                                  }
+                                  className={`pointer-events-none ${
+                                    attentionResult.attentionScore === "medium"
+                                      ? "bg-[#008F8A] text-white border-transparent"
+                                      : ""
+                                  }`}
                                 >
-                                  <p>{criterion.description}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Badge
-                                variant={
-                                  attentionResult.attentionScore === "high"
-                                    ? "success"
-                                    : attentionResult.attentionScore ===
-                                      "medium"
-                                    ? "secondary"
-                                    : "destructive"
-                                }
-                                className={`pointer-events-none ${
-                                  attentionResult.attentionScore === "medium"
-                                    ? "bg-[#008F8A] text-white border-transparent"
-                                    : ""
-                                }`}
-                              >
-                                {attentionResult.attentionScore?.toUpperCase()}
-                              </Badge>
-                              <ChevronDown className="h-4 w-4 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+                                  {attentionResult.attentionScore?.toUpperCase()}
+                                </Badge>
+                                <ChevronDown className="h-4 w-4 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+                              </div>
                             </div>
                           </div>
                         </CollapsibleTrigger>
@@ -438,6 +450,13 @@ export function ScreeningBadge({ screening }: ScreeningBadgeProps) {
                 })}
               </div>
             </div>
+            {(verification || verificationId) && (
+              <VerificationProof
+                verification={verification}
+                verificationId={verificationId}
+                className="mt-4"
+              />
+            )}
           </CardContent>
         )}
       </Card>

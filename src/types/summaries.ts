@@ -1,3 +1,4 @@
+import type { VerificationMetadata } from "@/types/agui-events";
 export interface DiscussionEngagementSummary {
   totalLikes: number;
   totalReplies: number;
@@ -12,6 +13,9 @@ export interface TextSummaryResponse {
   summary: string;
   cached?: boolean;
   cacheAge?: number;
+  model?: string | null;
+  verification?: VerificationMetadata | null;
+  verificationId?: string | null;
 }
 
 export interface ProposalSummaryResponse extends TextSummaryResponse {
@@ -37,6 +41,9 @@ export interface DiscussionSummaryResponse {
   generatedAt: number;
   cached: boolean;
   cacheAge?: number;
+  model?: string | null;
+  verification?: VerificationMetadata | null;
+  verificationId?: string | null;
 }
 
 export interface ReplySummaryResponse {
@@ -53,6 +60,9 @@ export interface ReplySummaryResponse {
   generatedAt: number;
   cached: boolean;
   cacheAge?: number;
+  model?: string | null;
+  verification?: VerificationMetadata | null;
+  verificationId?: string | null;
 }
 
 export interface ProposalRevisionSummaryResponse {
@@ -75,6 +85,9 @@ export interface ProposalRevisionSummaryResponse {
   generatedAt: number;
   cached: boolean;
   cacheAge?: number;
+  model?: string | null;
+  verification?: VerificationMetadata | null;
+  verificationId?: string | null;
 }
 
 export interface PostRevisionSummaryResponse {
@@ -89,4 +102,7 @@ export interface PostRevisionSummaryResponse {
   generatedAt: number;
   cached: boolean;
   cacheAge?: number;
+  model?: string | null;
+  verification?: VerificationMetadata | null;
+  verificationId?: string | null;
 }

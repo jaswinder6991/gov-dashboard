@@ -1,4 +1,5 @@
 import { Markdown } from "@/components/proposal/Markdown";
+import { VerificationProof } from "@/components/verification/VerificationProof";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +15,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, User, Calendar, X } from "lucide-react";
 import type { ProposalRevision } from "@/types/proposals";
+import type { ProposalRevisionSummaryResponse } from "@/types/summaries";
 
 interface VersionSelectorProps {
   currentRevision: number;
@@ -23,7 +25,7 @@ interface VersionSelectorProps {
   showDiffHighlights: boolean;
   onToggleDiff: (show: boolean) => void;
   onSummarizeChanges: () => void;
-  revisionSummary: string | null;
+  revisionSummary: ProposalRevisionSummaryResponse | null;
   revisionSummaryLoading: boolean;
   revisionSummaryError?: string;
   onHideSummary: () => void;
@@ -175,7 +177,16 @@ export default function VersionSelector({
                 </Button>
               </div>
               <AlertDescription>
-                <Markdown content={revisionSummary} className="text-sm" />
+                <Markdown
+                  content={revisionSummary.summary}
+                  className="text-sm"
+                />
+                <VerificationProof
+                  verification={revisionSummary.verification ?? undefined}
+                  verificationId={revisionSummary.verificationId ?? undefined}
+                  model={revisionSummary.model ?? undefined}
+                  className="mt-3"
+                />
               </AlertDescription>
             </Alert>
           </>

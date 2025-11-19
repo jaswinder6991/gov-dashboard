@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,6 +29,11 @@ export const Navigation = () => {
       console.log("Sign in successful");
     } catch (error) {
       console.error("Failed to sign in:", error);
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to connect wallet. Please try again.";
+      toast.error(message);
     }
   };
 

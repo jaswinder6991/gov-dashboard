@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Evaluation } from "@/types/evaluation";
 import type { ProposalRevision } from "@/types/proposals";
 import type { DiscourseRevisionResponse } from "@/types/discourse";
+import type { VerificationMetadata } from "@/types/agui-events";
 import { ScreeningBadge } from "@/components/proposal/screening/ScreeningBadge";
 import { reconstructRevisionContent } from "@/utils/revisionContentUtils";
 import { sanitizeHtml, stripHtml } from "@/utils/html-utils";
@@ -58,7 +59,13 @@ export default function VersionHistory({
   const [screeningResults, setScreeningResults] = useState<
     Record<
       number,
-      { evaluation: Evaluation; nearAccount: string; timestamp: string }
+      {
+        evaluation: Evaluation;
+        nearAccount: string;
+        timestamp: string;
+        verification?: VerificationMetadata | null;
+        verificationId?: string | null;
+      }
     >
   >({});
   const [screeningErrors, setScreeningErrors] = useState<
@@ -103,7 +110,13 @@ export default function VersionHistory({
   const fetchExistingScreenings = async (versionNumbers: number[]) => {
     const newResults: Record<
       number,
-      { evaluation: Evaluation; nearAccount: string; timestamp: string }
+      {
+        evaluation: Evaluation;
+        nearAccount: string;
+        timestamp: string;
+        verification?: VerificationMetadata | null;
+        verificationId?: string | null;
+      }
     > = {};
 
     for (const version of versionNumbers) {
@@ -205,12 +218,29 @@ export default function VersionHistory({
         return;
       }
 
+      const verification =
+        typeof saveData === "object" &&
+        saveData !== null &&
+        "verification" in saveData
+          ? (saveData as { verification?: VerificationMetadata | null })
+              .verification ?? null
+          : null;
+      const proofVerificationId =
+        typeof saveData === "object" &&
+        saveData !== null &&
+        "verificationId" in saveData
+          ? (saveData as { verificationId?: string | null }).verificationId ??
+            null
+          : null;
+
       setScreeningResults((prev) => ({
         ...prev,
         [revisionNumber]: {
           evaluation: saveData.evaluation,
           nearAccount: nearAccount,
           timestamp: new Date().toISOString(),
+          verification,
+          verificationId: proofVerificationId ?? verification?.messageId ?? null,
         },
       }));
     } catch (err: unknown) {
@@ -246,6 +276,8 @@ export default function VersionHistory({
               qualityScore: screeningData.evaluation.qualityScore,
               attentionScore: screeningData.evaluation.attentionScore,
             }}
+            verification={screeningData.verification ?? undefined}
+            verificationId={screeningData.verificationId ?? undefined}
           />
         </div>
       );

@@ -11,6 +11,10 @@ import type {
 } from "@/types/discourse";
 import type { ApiErrorResponse } from "@/types/api";
 import type { ReplySummaryResponse } from "@/types/summaries";
+import {
+  extractVerificationMetadata,
+  normalizeVerificationPayload,
+} from "@/utils/verification";
 
 const replyLimiter = createRateLimiter(rateLimitConfig.replySummary);
 const DISCOURSE_URL = servicesConfig.discourseBaseUrl;
@@ -207,6 +211,7 @@ ${truncatedContent}`;
       contentWithContext
     );
 
+    const model = "deepseek-ai/DeepSeek-V3.1";
     const summaryResponse = await fetch(
       "https://cloud-api.near.ai/v1/chat/completions",
       {
@@ -216,7 +221,7 @@ ${truncatedContent}`;
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "deepseek-ai/DeepSeek-V3.1",
+          model,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.3, // Very low for focused, brief output
           max_tokens: 250, // Short summaries only
@@ -230,6 +235,11 @@ ${truncatedContent}`;
 
     const data = await summaryResponse.json();
     const summary: string = data.choices[0]?.message?.content ?? "";
+    const rawVerification = extractVerificationMetadata(data);
+    const { verification, verificationId } = normalizeVerificationPayload(
+      rawVerification,
+      data?.id || data?.choices?.[0]?.id
+    );
 
     if (!summary) {
       throw new Error("Empty summary returned from AI");
@@ -261,6 +271,9 @@ ${truncatedContent}`;
       truncated: replyContent.length > MAX_LENGTH,
       generatedAt: Date.now(), // For cache age tracking
       cached: false,
+      model,
+      verification,
+      verificationId,
     };
 
     // ===================================================================

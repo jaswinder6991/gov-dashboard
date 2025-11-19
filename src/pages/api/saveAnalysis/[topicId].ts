@@ -137,10 +137,11 @@ export default async function handler(
   }
 
   try {
-    const evaluation: Evaluation = await requestEvaluation(
-      sanitizedTitle,
-      sanitizedContent
-    );
+    const {
+      evaluation,
+      verification,
+      verificationId,
+    } = await requestEvaluation(sanitizedTitle, sanitizedContent);
 
     // Extract computed scores from evaluation
     const qualityScore = evaluation.qualityScore;
@@ -188,6 +189,8 @@ export default async function handler(
       saved: true,
       passed: evaluation.overallPass,
       evaluation,
+      verification,
+      verificationId,
       qualityScore,
       attentionScore,
       version: versionToScreen,

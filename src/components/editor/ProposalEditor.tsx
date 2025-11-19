@@ -10,6 +10,7 @@ import {
   type MessagesSnapshotEvent,
   type StateDeltaEvent,
   type StateSnapshotEvent,
+  type VerificationMetadata,
 } from "@/types/agui-events";
 import type { Evaluation } from "@/types/evaluation";
 import { SidebarChat } from "@/components/editor/SidebarChat";
@@ -21,6 +22,8 @@ interface Message {
   id: string;
   role: MessageRole;
   content: string;
+  verification?: VerificationMetadata;
+  remoteId?: string;
 }
 
 interface ProposalState {
@@ -34,6 +37,7 @@ interface ToolCallState {
   name: string;
   args: string;
   status: "in_progress" | "completed";
+  verification?: VerificationMetadata;
 }
 
 export default function ProposalEditor() {
@@ -52,6 +56,9 @@ export default function ProposalEditor() {
     content: "",
     evaluation: null,
   });
+  const [evaluationVerification, setEvaluationVerification] =
+    useState<VerificationMetadata | undefined>();
+  const [evaluationChatId, setEvaluationChatId] = useState<string | undefined>();
 
   // local editable state
   const [localTitle, setLocalTitle] = useState("");
@@ -73,6 +80,8 @@ export default function ProposalEditor() {
   const [currentMessage, setCurrentMessage] = useState<{
     id: string;
     content: string;
+    verification?: VerificationMetadata;
+    remoteId?: string;
   } | null>(null);
 
   const [activeToolCalls, setActiveToolCalls] = useState<
@@ -226,17 +235,22 @@ export default function ProposalEditor() {
       case EventType.RUN_FINISHED:
         setIsRunning(false);
         setCurrentStep(null);
-        if (currentMessage && !messageClosedRef.current) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: currentMessage.id,
-              role: "assistant",
-              content: currentMessage.content,
-            },
-          ]);
-          setCurrentMessage(null);
-        }
+        setCurrentMessage((prev) => {
+          if (prev && !messageClosedRef.current) {
+            setMessages((msgs) => [
+              ...msgs,
+              {
+                id: prev.id,
+                role: "assistant",
+                content: prev.content,
+                verification: prev.verification,
+                remoteId: prev.remoteId ?? prev.id,
+              },
+            ]);
+            messageClosedRef.current = true;
+          }
+          return null;
+        });
         return;
 
       case EventType.RUN_ERROR:
@@ -263,30 +277,51 @@ export default function ProposalEditor() {
         return;
 
       case EventType.TEXT_MESSAGE_START:
-        setCurrentMessage({ id: event.messageId, content: "" });
+        setCurrentMessage({
+          id: event.messageId,
+          content: "",
+          verification: event.verification,
+          remoteId: event.messageId,
+        });
         return;
 
       case EventType.TEXT_MESSAGE_CONTENT:
-        setCurrentMessage((prev) =>
-          prev
-            ? { ...prev, content: prev.content + event.delta }
-            : { id: event.messageId, content: event.delta }
-        );
+        setCurrentMessage((prev) => {
+          const nextVerification = event.verification ?? prev?.verification;
+          if (prev) {
+            return {
+              ...prev,
+              content: prev.content + event.delta,
+              verification: nextVerification,
+              remoteId: prev.remoteId ?? event.messageId,
+            };
+          }
+          return {
+            id: event.messageId,
+            content: event.delta,
+            verification: nextVerification,
+            remoteId: event.messageId,
+          };
+        });
         return;
 
       case EventType.TEXT_MESSAGE_END:
-        if (currentMessage && !messageClosedRef.current) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: currentMessage.id,
-              role: "assistant",
-              content: currentMessage.content,
-            },
-          ]);
-          setCurrentMessage(null);
-          messageClosedRef.current = true;
-        }
+        setCurrentMessage((prev) => {
+          if (prev && !messageClosedRef.current) {
+            setMessages((msgs) => [
+              ...msgs,
+              {
+                id: prev.id,
+                role: "assistant",
+                content: prev.content,
+                verification: event.verification ?? prev.verification,
+                remoteId: prev.remoteId ?? prev.id,
+              },
+            ]);
+            messageClosedRef.current = true;
+          }
+          return null;
+        });
         return;
 
       case EventType.TOOL_CALL_START:
@@ -298,6 +333,7 @@ export default function ProposalEditor() {
             name: event.toolCallName,
             args: "",
             status: "in_progress",
+            verification: event.verification,
           });
           return updated;
         });
@@ -311,6 +347,7 @@ export default function ProposalEditor() {
             updated.set(event.toolCallId, {
               ...existing,
               args: existing.args + event.delta,
+              verification: event.verification ?? existing.verification,
             });
           }
           return updated;
@@ -327,11 +364,13 @@ export default function ProposalEditor() {
             completedToolCallsRef.current.set(event.toolCallId, {
               ...existing,
               status: "completed",
+              verification: event.verification ?? existing.verification,
             });
 
             updated.set(event.toolCallId, {
               ...existing,
               status: "completed",
+              verification: event.verification ?? existing.verification,
             });
           }
           return updated;
@@ -379,6 +418,18 @@ export default function ProposalEditor() {
 
       case EventType.STATE_DELTA:
         console.log("STATE_DELTA received:", event.delta);
+
+        const evaluationUpdated = Array.isArray(
+          (event as StateDeltaEvent<ProposalState>).delta
+        )
+          ? (
+              (event as StateDeltaEvent<ProposalState>).delta as Operation[]
+            ).some((op) => op.path === "/evaluation")
+          : false;
+        if (evaluationUpdated && event.verification) {
+          setEvaluationVerification(event.verification);
+          setEvaluationChatId(event.verification.messageId);
+        }
 
         try {
           // Apply the delta to get the new state
@@ -637,7 +688,11 @@ export default function ProposalEditor() {
                 sendMessage={sendMessage}
                 evaluationSlot={
                   proposalState.evaluation ? (
-                    <EvaluationSummary evaluation={proposalState.evaluation} />
+                    <EvaluationSummary
+                      evaluation={proposalState.evaluation}
+                      verification={evaluationVerification}
+                      verificationId={evaluationChatId}
+                    />
                   ) : undefined
                 }
               />

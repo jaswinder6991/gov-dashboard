@@ -1,44 +1,25 @@
+import { useEffect } from "react";
 import { Chatbot } from "@/components/chat/Chatbot";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Shield } from "lucide-react";
 
 export default function ChatPage() {
+  useEffect(() => {
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, []);
+
   return (
-    <div className="min-h-screen bg-background">
-      <div className="max-w-4xl mx-auto p-8">
-        <div className="mb-8 text-center">
-          <h1 className="text-4xl font-bold mb-2">AI Chat Assistant</h1>
-          <p className="text-muted-foreground">
-            Ask questions about NEAR governance, proposals, and platform
-            features
-          </p>
+    <div className="h-screen bg-background flex overflow-hidden">
+      <div className="flex-1 overflow-hidden">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 h-full">
+          <Chatbot
+            welcomeMessage="I can help you participate in the House of Stake."
+            placeholder="Ask about proposals, policies, processes, etc."
+            className="h-full"
+          />
         </div>
-
-        <Chatbot
-          welcomeMessage="I can help you understand NEAR governance proposals, explain platform features, or answer questions about the screening process."
-          placeholder="Ask me about NEAR governance..."
-        />
-
-        <Card className="mt-6 border-green-200 bg-green-50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-green-900">
-              <Shield className="h-5 w-5" />
-              Privacy & Security
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <CardDescription className="text-green-700">
-              All conversations are private and run in Trusted Execution
-              Environments (TEEs). Responses are cryptographically verifiable.
-            </CardDescription>
-          </CardContent>
-        </Card>
       </div>
     </div>
   );

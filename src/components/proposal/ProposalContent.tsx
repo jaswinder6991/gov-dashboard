@@ -3,6 +3,7 @@ import MarkdownIt from "markdown-it";
 import DOMPurify from "dompurify";
 import { Markdown } from "@/components/proposal/Markdown";
 import VersionSelector from "@/components/proposal/revisions/VersionSelector";
+import { VerificationProof } from "@/components/verification/VerificationProof";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -11,6 +12,10 @@ import { Separator } from "@/components/ui/separator";
 import { ChevronDown, ChevronUp, FileText, History } from "lucide-react";
 import type { ProposalFrontmatter } from "@/utils/metadata";
 import type { ProposalRevision } from "@/types/proposals";
+import type {
+  ProposalRevisionSummaryResponse,
+  TextSummaryResponse,
+} from "@/types/summaries";
 
 const FRONTMATTER_FIELDS: Array<{
   label: string;
@@ -32,7 +37,7 @@ interface ProposalContentProps {
   metadata: ProposalFrontmatter;
   isExpanded: boolean;
   onToggleExpand: (expanded: boolean) => void;
-  proposalSummary: string | null;
+  proposalSummary: TextSummaryResponse | null;
   proposalSummaryLoading: boolean;
   proposalSummaryError?: string;
   onFetchProposalSummary: () => void;
@@ -49,7 +54,7 @@ interface ProposalContentProps {
   onVersionChange?: (version: number) => void;
   onToggleDiff?: (show: boolean) => void;
   onSummarizeChanges?: () => void;
-  revisionSummary?: string | null;
+  revisionSummary?: ProposalRevisionSummaryResponse | null;
   revisionSummaryLoading?: boolean;
   revisionSummaryError?: string;
   onHideRevisionSummary?: () => void;
@@ -213,8 +218,16 @@ export default function ProposalContent({
               <div className="flex items-center gap-2 mb-2">
                 <Badge variant="secondary">AI Summary</Badge>
               </div>
-              <AlertDescription>
-                <Markdown content={proposalSummary} className="text-sm" />
+              <AlertDescription className="space-y-3">
+                <Markdown
+                  content={proposalSummary.summary}
+                  className="text-sm"
+                />
+                <VerificationProof
+                  verification={proposalSummary.verification ?? undefined}
+                  verificationId={proposalSummary.verificationId ?? undefined}
+                  model={proposalSummary.model ?? undefined}
+                />
               </AlertDescription>
             </Alert>
             <Separator />
@@ -237,12 +250,12 @@ export default function ProposalContent({
 
         {/* Content */}
         {isExpanded ? (
-          <>
+          <div className="w-full overflow-x-auto">
             <div
-              className="prose prose-sm max-w-none [&>ul]:list-disc [&>ol]:list-decimal [&>ul]:ml-4 [&>ol]:ml-4"
+              className="prose prose-sm max-w-full break-words [&_*]:break-words [&>ul]:list-disc [&>ol]:list-decimal [&>ul]:ml-4 [&>ol]:ml-4 [&_table]:w-full [&_table]:max-w-full"
               dangerouslySetInnerHTML={{ __html: renderedContent }}
             />
-          </>
+          </div>
         ) : (
           <div className="flex justify-center pt-2">
             <Button

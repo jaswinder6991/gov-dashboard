@@ -75,10 +75,11 @@ export default async function handler(
   }
 
   try {
-    const evaluation: Evaluation = await requestEvaluation(
-      sanitizedTitle,
-      sanitizedProposal
-    );
+    const {
+      evaluation,
+      verification,
+      verificationId,
+    } = await requestEvaluation(sanitizedTitle, sanitizedProposal);
 
     console.log(
       `[Screen] Evaluation complete for ${nearAddress} - Pass: ${
@@ -91,6 +92,8 @@ export default async function handler(
     return res.status(200).json({
       evaluation,
       authenticatedAs: nearAddress,
+      verification,
+      verificationId,
     });
   } catch (error) {
     return respondWithScreeningError(res, error, "Failed to evaluate proposal");

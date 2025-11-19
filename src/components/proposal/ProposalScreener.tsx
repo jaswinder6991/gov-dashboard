@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Evaluation } from "@/types/evaluation";
+import type { VerificationMetadata } from "@/types/agui-events";
 import {
   Card,
   CardContent,
@@ -23,6 +24,7 @@ import {
   TrendingUp,
   Eye,
 } from "lucide-react";
+import { VerificationProof } from "@/components/verification/VerificationProof";
 
 export const ProposalScreener = () => {
   const [title, setTitle] = useState<string>("");
@@ -30,6 +32,9 @@ export const ProposalScreener = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [result, setResult] = useState<Evaluation | null>(null);
   const [error, setError] = useState<string>("");
+  const [verificationMeta, setVerificationMeta] =
+    useState<VerificationMetadata | null>(null);
+  const [verificationId, setVerificationId] = useState<string | null>(null);
 
   const evaluateProposal = async () => {
     if (!title.trim()) {
@@ -44,6 +49,8 @@ export const ProposalScreener = () => {
     setLoading(true);
     setError("");
     setResult(null);
+    setVerificationMeta(null);
+    setVerificationId(null);
 
     try {
       const response = await fetch("/api/screen", {
@@ -67,8 +74,16 @@ export const ProposalScreener = () => {
         );
       }
 
-      const data: { evaluation: Evaluation } = await response.json();
+      const data: {
+        evaluation: Evaluation;
+        verification?: VerificationMetadata | null;
+        verificationId?: string | null;
+      } = await response.json();
       setResult(data.evaluation);
+      setVerificationMeta(data.verification ?? null);
+      setVerificationId(
+        data.verificationId ?? data.verification?.messageId ?? null
+      );
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Failed to evaluate proposal";
@@ -310,6 +325,14 @@ export const ProposalScreener = () => {
                       This proposal has passed all automated quality criteria
                     </AlertDescription>
                   </Alert>
+                )}
+
+                {(verificationMeta || verificationId) && (
+                  <VerificationProof
+                    verification={verificationMeta ?? undefined}
+                    verificationId={verificationId ?? undefined}
+                    className="mt-3"
+                  />
                 )}
               </div>
             )}

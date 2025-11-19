@@ -94,10 +94,11 @@ export default async function handler(
 
   // Request evaluation from AI
   try {
-    const evaluation: Evaluation = await requestEvaluation(
-      sanitizedTitle,
-      sanitizedContent
-    );
+    const {
+      evaluation,
+      verification,
+      verificationId,
+    } = await requestEvaluation(sanitizedTitle, sanitizedContent);
 
     const logPrefix = isAuthenticated
       ? `[EvaluateDraft] ${accountId}`
@@ -114,6 +115,8 @@ export default async function handler(
     return res.status(200).json({
       evaluation,
       authenticatedAs: accountId,
+      verification,
+      verificationId,
     });
   } catch (error) {
     return respondWithScreeningError(res, error, "Failed to evaluate proposal");

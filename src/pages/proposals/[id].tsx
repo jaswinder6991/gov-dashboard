@@ -4,9 +4,11 @@ import ProposalContent from "@/components/proposal/ProposalContent";
 import { ScreeningBadge } from "@/components/proposal/screening/ScreeningBadge";
 import { ScreeningButton } from "@/components/proposal/screening/ScreeningButton";
 import { Markdown } from "@/components/proposal/Markdown";
+import { VerificationProof } from "@/components/verification/VerificationProof";
 import { ProposalChatbot } from "@/components/proposal/ProposalChatbot";
 import { useNear } from "@/hooks/useNear";
 import type { Evaluation } from "@/types/evaluation";
+import type { VerificationMetadata } from "@/types/agui-events";
 import { reconstructRevisionContent } from "@/utils/revisionContentUtils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
+import { extractExpectationsFromProposal } from "@/utils/attestation-expectations";
 import {
   ExternalLink,
   MessageSquare,
@@ -50,6 +53,8 @@ interface ScreeningData {
   revisionNumber: number;
   qualityScore: number;
   attentionScore: number;
+  verification?: VerificationMetadata | null;
+  verificationId?: string | null;
 }
 
 export default function ProposalDetail() {
@@ -71,24 +76,25 @@ export default function ProposalDetail() {
   const [versionContent, setVersionContent] = useState<string>("");
   const [versionDiffHtml, setVersionDiffHtml] = useState<string>("");
   const [revisionsLoading, setRevisionsLoading] = useState(false);
-  const [proposalSummary, setProposalSummary] = useState<string | null>(null);
+  const [proposalSummary, setProposalSummary] =
+    useState<TextSummaryResponse | null>(null);
   const [proposalSummaryLoading, setProposalSummaryLoading] = useState(false);
   const [proposalSummaryError, setProposalSummaryError] = useState("");
-  const [revisionSummary, setRevisionSummary] = useState<string | null>(null);
+  const [revisionSummary, setRevisionSummary] =
+    useState<ProposalRevisionSummaryResponse | null>(null);
   const [revisionSummaryLoading, setRevisionSummaryLoading] = useState(false);
   const [revisionSummaryError, setRevisionSummaryError] = useState("");
-  const [replySummaries, setReplySummaries] = useState<Record<number, string>>(
-    {}
-  );
+  const [replySummaries, setReplySummaries] = useState<
+    Record<number, ReplySummaryResponse>
+  >({});
   const [replySummaryLoading, setReplySummaryLoading] = useState<
     Record<number, boolean>
   >({});
   const [replySummaryErrors, setReplySummaryErrors] = useState<
     Record<number, string>
   >({});
-  const [discussionSummary, setDiscussionSummary] = useState<string | null>(
-    null
-  );
+  const [discussionSummary, setDiscussionSummary] =
+    useState<DiscussionSummaryResponse | null>(null);
   const [discussionSummaryVisible, setDiscussionSummaryVisible] =
     useState(false);
   const [discussionSummaryLoading, setDiscussionSummaryLoading] =
@@ -286,7 +292,7 @@ export default function ProposalDetail() {
       });
       if (response.ok) {
         const data: TextSummaryResponse = await response.json();
-        setProposalSummary(data.summary);
+        setProposalSummary(data);
         setProposalSummaryError("");
       } else {
         const message = await parseErrorResponse(
@@ -318,7 +324,7 @@ export default function ProposalDetail() {
       });
       if (response.ok) {
         const data: ProposalRevisionSummaryResponse = await response.json();
-        setRevisionSummary(data.summary);
+        setRevisionSummary(data);
         setRevisionSummaryError("");
       } else {
         const message = await parseErrorResponse(
@@ -352,7 +358,7 @@ export default function ProposalDetail() {
       );
       if (response.ok) {
         const data: ReplySummaryResponse = await response.json();
-        setReplySummaries((prev) => ({ ...prev, [replyId]: data.summary }));
+        setReplySummaries((prev) => ({ ...prev, [replyId]: data }));
         setReplySummaryErrors((prev) => ({ ...prev, [replyId]: "" }));
       } else {
         const message = await parseErrorResponse(
@@ -413,7 +419,7 @@ export default function ProposalDetail() {
         throw new Error(message);
       }
       const data: DiscussionSummaryResponse = await response.json();
-      setDiscussionSummary(data.summary);
+      setDiscussionSummary(data);
       setDiscussionSummaryVisible(true);
     } catch (err: unknown) {
       setDiscussionSummaryError(
@@ -644,10 +650,28 @@ export default function ProposalDetail() {
                       <div className="space-y-4">
                         <div className="p-4 bg-blue-50 border-l-4 border-blue-500 rounded-lg">
                           <Markdown
-                            content={discussionSummary}
+                            content={discussionSummary.summary}
                             className="text-sm leading-relaxed"
                           />
                         </div>
+                        {(() => {
+                          const expectations = extractExpectationsFromProposal(discussionSummary);
+                          return (
+                            <VerificationProof
+                              verification={discussionSummary.verification ?? undefined}
+                              verificationId={
+                                discussionSummary.verificationId ?? undefined
+                              }
+                              model={discussionSummary.model ?? undefined}
+                              nonce={expectations.nonce ?? undefined}
+                              expectedArch={expectations.arch ?? undefined}
+                              expectedDeviceCertHash={expectations.deviceCertHash ?? undefined}
+                              expectedRimHash={expectations.rimHash ?? undefined}
+                              expectedUeid={expectations.ueid ?? undefined}
+                              expectedMeasurements={expectations.measurements ?? undefined}
+                            />
+                          );
+                        })()}
                         <Separator />
                         <div className="flex items-start gap-2">
                           <Badge variant="secondary" className="text-xs">
@@ -663,8 +687,10 @@ export default function ProposalDetail() {
 
                     {showReplies && (
                       <div className="space-y-4">
-                        {proposal.replies.map((reply) => (
-                          <Card key={reply.id} className="bg-muted/50">
+                        {proposal.replies.map((reply) => {
+                          const replySummary = replySummaries[reply.id];
+                          return (
+                            <Card key={reply.id} className="bg-muted/50">
                             <CardContent className="pt-6">
                               <div className="flex justify-between items-start mb-3 text-sm text-muted-foreground">
                                 <div className="flex items-center gap-3">
@@ -751,7 +777,7 @@ export default function ProposalDetail() {
                                 }}
                               />
 
-                              {!replySummaries[reply.id] ? (
+                              {!replySummary ? (
                                 <>
                                   <Button
                                     variant="outline"
@@ -799,15 +825,37 @@ export default function ProposalDetail() {
                                       </Button>
                                     </div>
                                     <Markdown
-                                      content={replySummaries[reply.id]}
-                                      className="text-xs"
+                                      content={replySummary.summary}
+                                  className="text-xs"
+                                />
+                                {(() => {
+                                  const expectations = extractExpectationsFromProposal(
+                                    replySummary
+                                  );
+                                  return (
+                                    <VerificationProof
+                                      verification={replySummary.verification ?? undefined}
+                                      verificationId={
+                                        replySummary.verificationId ?? undefined
+                                      }
+                                      model={replySummary.model ?? undefined}
+                                      nonce={expectations.nonce ?? undefined}
+                                      expectedArch={expectations.arch ?? undefined}
+                                      expectedDeviceCertHash={expectations.deviceCertHash ?? undefined}
+                                      expectedRimHash={expectations.rimHash ?? undefined}
+                                      expectedUeid={expectations.ueid ?? undefined}
+                                      expectedMeasurements={expectations.measurements ?? undefined}
+                                      className="mt-2"
                                     />
-                                  </AlertDescription>
-                                </Alert>
-                              )}
+                                  );
+                                })()}
+                              </AlertDescription>
+                            </Alert>
+                          )}
                             </CardContent>
                           </Card>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </CardContent>
@@ -821,7 +869,11 @@ export default function ProposalDetail() {
               {screeningChecked &&
                 screening &&
                 screening.revisionNumber === selectedVersion && (
-                  <ScreeningBadge screening={screening} />
+                  <ScreeningBadge
+                    screening={screening}
+                    verification={screening.verification ?? undefined}
+                    verificationId={screening.verificationId ?? undefined}
+                  />
                 )}
 
               {screeningChecked &&

@@ -1,10 +1,22 @@
 import React from "react";
 import type { Evaluation } from "@/types/evaluation";
+import type { VerificationMetadata } from "@/types/agui-events";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { CheckCircle2, AlertTriangle } from "lucide-react";
 import { cn } from "@/utils/tailwind";
+import { VerificationProof } from "@/components/verification/VerificationProof";
 
-export function EvaluationSummary({ evaluation }: { evaluation: Evaluation }) {
+interface EvaluationSummaryProps {
+  evaluation: Evaluation;
+  verification?: VerificationMetadata;
+  verificationId?: string;
+}
+
+export function EvaluationSummary({
+  evaluation,
+  verification,
+  verificationId,
+}: EvaluationSummaryProps) {
   const isPassing = evaluation.overallPass;
 
   return (
@@ -29,6 +41,13 @@ export function EvaluationSummary({ evaluation }: { evaluation: Evaluation }) {
       <AlertDescription className="text-xs leading-relaxed">
         {evaluation.summary}
       </AlertDescription>
+      {(verification || verificationId) && (
+        <VerificationProof
+          verification={verification}
+          verificationId={verificationId}
+          className="mt-3"
+        />
+      )}
     </Alert>
   );
 }

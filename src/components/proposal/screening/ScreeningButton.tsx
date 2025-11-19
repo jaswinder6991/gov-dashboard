@@ -1,8 +1,10 @@
 import { useState } from "react";
 import type { Evaluation } from "@/types/evaluation";
+import type { VerificationMetadata } from "@/types/agui-events";
 import { sign } from "near-sign-verify";
 import { Button } from "@/components/ui/button";
 import { useNear } from "@/hooks/useNear";
+import { VerificationProof } from "@/components/verification/VerificationProof";
 
 interface ScreeningButtonProps {
   topicId: string;
@@ -24,6 +26,9 @@ export function ScreeningButton({
   const [screening, setScreening] = useState(false);
   const [result, setResult] = useState<Evaluation | null>(null);
   const [error, setError] = useState("");
+  const [verificationMeta, setVerificationMeta] =
+    useState<VerificationMetadata | null>(null);
+  const [verificationId, setVerificationId] = useState<string | null>(null);
 
   const prepareContent = (html: string): string => {
     const normalized = html;
@@ -44,6 +49,8 @@ export function ScreeningButton({
     setScreening(true);
     setError("");
     setResult(null);
+    setVerificationMeta(null);
+    setVerificationId(null);
 
     try {
       if (!wallet)
@@ -105,12 +112,28 @@ export function ScreeningButton({
         "evaluation" in saveData
           ? (saveData as { evaluation: Evaluation }).evaluation
           : null;
+      const verification =
+        typeof saveData === "object" &&
+        saveData !== null &&
+        "verification" in saveData
+          ? (saveData as { verification?: VerificationMetadata | null })
+              .verification ?? null
+          : null;
+      const proofVerificationId =
+        typeof saveData === "object" &&
+        saveData !== null &&
+        "verificationId" in saveData
+          ? (saveData as { verificationId?: string | null }).verificationId ??
+            null
+          : null;
 
       if (!evaluation) {
         throw new Error("Missing evaluation data in response");
       }
 
       setResult(evaluation);
+      setVerificationMeta(verification);
+      setVerificationId(proofVerificationId ?? verification?.messageId ?? null);
       onScreeningComplete?.();
     } catch (err: unknown) {
       const message =
@@ -154,15 +177,23 @@ export function ScreeningButton({
           </p>
         </div>
 
-        <p className="mb-3">
-          <strong>Summary:</strong> {result.summary}
-        </p>
-        <p className="text-sm text-muted-foreground">
-          ✓ Results saved! Screening status has been updated.
-        </p>
-      </div>
-    );
-  }
+      <p className="mb-3">
+        <strong>Summary:</strong> {result.summary}
+      </p>
+      <p className="text-sm text-muted-foreground">
+        ✓ Results saved! Screening status has been updated.
+      </p>
+      {(verificationMeta || verificationId) && (
+        <div className="mt-4">
+          <VerificationProof
+            verification={verificationMeta ?? undefined}
+            verificationId={verificationId ?? undefined}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 
   // Show loading state
   if (loading) {
