@@ -13,7 +13,7 @@ const startServer = process.env.PLAYWRIGHT_START_SERVER !== "false";
 process.env.VERIFY_USE_MOCKS = process.env.VERIFY_USE_MOCKS ?? "true";
 
 export default defineConfig({
-  testDir: "./tests",
+  testDir: "./tests/e2e",
   // Only run Playwright specs (avoid picking up unit tests in tests/unit)
   testMatch: /.*\.spec\.(ts|tsx|js)/,
   retries: 0,

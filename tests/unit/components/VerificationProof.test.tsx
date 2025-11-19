@@ -1,9 +1,21 @@
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  act,
+  within,
+} from "@testing-library/react";
 import { VerificationProof } from "@/components/verification/VerificationProof";
 import type { VerificationProofResponse } from "@/types/verification";
-import { mockNonce, mockAddress, verifiedProofMock, failedProofMock } from "../fixtures/verification";
+import {
+  mockNonce,
+  mockAddress,
+  verifiedProofMock,
+  failedProofMock,
+} from "../../fixtures/verification";
 
 vi.mock("ethers", () => ({
   ethers: {
@@ -58,7 +70,9 @@ describe("VerificationProof component", () => {
     await act(async () => fireEvent.click(button));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(screen.getAllByText(/verified/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/TEE Verification Process/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Hardware Attestation/i).length).toBeGreaterThan(
+      0
+    );
   });
 
   it("shows expectations missing alert and skips fetch when expectations absent", async () => {
@@ -85,7 +99,9 @@ describe("VerificationProof component", () => {
     renderComponent();
     await act(async () => fireEvent.click(screen.getByRole("button")));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(screen.getByText(/NRAS verification failed/i)).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/Attestation failed/i).length
+    ).toBeGreaterThan(0);
   });
 
   it("renders badge reasons when NRAS/intel/nonce fail", async () => {
@@ -94,14 +110,25 @@ describe("VerificationProof component", () => {
       json: async () =>
         ({
           ...failedProofMock,
-          results: { verified: false, reasons: ["NRAS failed", "Nonce mismatch"] },
+          attestation: {
+            gateway_attestation: {
+              ...(failedProofMock.attestation as any)?.gateway_attestation,
+              intel_quote: JSON.stringify({ eat_nonce: mockNonce }),
+            },
+          },
+          intel: { verified: false },
         } as VerificationProofResponse),
     });
     renderComponent();
     await act(async () => fireEvent.click(screen.getByRole("button")));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(screen.getAllByText(/NRAS failed/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Nonce mismatch/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Nonce mismatch/i).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/Attestation failed/i).length
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/Intel attestation failed or missing/i).length
+    ).toBeGreaterThan(0);
   });
 
   it("shows fetch error alert", async () => {
@@ -143,8 +170,9 @@ describe("VerificationProof component", () => {
     renderComponent();
     await act(async () => fireEvent.click(screen.getByRole("button")));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(screen.getByText(/Intel attestation not configured/)).toBeInTheDocument();
-    expect(screen.getByText(/Intel API key missing/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Intel API key missing; configure INTEL_TDX_API_KEY\./i)
+    ).toBeInTheDocument();
   });
 
   it("shows missing attested signing address error", async () => {
@@ -187,65 +215,52 @@ describe("VerificationProof component", () => {
         ({
           ...failedProofMock,
           attestation: {
-            ...(failedProofMock.attestation || {}),
             gateway_attestation: {
               ...(failedProofMock.attestation as any)?.gateway_attestation,
-              intel_quote: { quote: "data" },
+              intel_quote: JSON.stringify({ eat_nonce: mockNonce }),
             },
           },
-          results: { verified: false, reasons: ["NRAS failed", "Intel attestation failed"] },
+          intel: { verified: false },
         }) as VerificationProofResponse,
     });
     renderComponent();
     await act(async () => fireEvent.click(screen.getByRole("button")));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(screen.getByText(/GPU Attestation/i)).toBeInTheDocument();
-    expect(screen.getByText(/CPU Attestation/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/NRAS verification failed/i).length).toBeGreaterThan(0);
     expect(
-      screen.getAllByText(/Intel verification failed or missing/i).length
+      screen.getAllByText(/Attestation failed/i).length
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/Intel attestation failed or missing/i).length
     ).toBeGreaterThan(0);
   });
 
-  it("renders hardware rows as Unverified when not validated", async () => {
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () =>
-        ({
-          ...verifiedProofMock,
-          nras: { verified: false, claims: {}, reasons: ["missing attestation"] },
-        }) as VerificationProofResponse,
-    });
-    renderComponent();
+  it("shows No Verification ID alert when verification ID missing", async () => {
+    render(
+      <VerificationProof
+        model="m"
+        requestHash="req"
+        responseHash="res"
+        nonce={mockNonce}
+        expectedArch="HOPPER"
+        expectedDeviceCertHash="hash"
+        expectedRimHash="rim"
+        expectedUeid="ueid"
+        expectedMeasurements={["m1"]}
+      />
+    );
     await act(async () => fireEvent.click(screen.getByRole("button")));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const unverifiedRows = screen.getAllByText(/Unverified/i);
-    expect(unverifiedRows.length).toBeGreaterThan(0);
+    expect(screen.getByText(/No Verification ID/i)).toBeInTheDocument();
   });
 
-  it("expands hardware details section when data exists", async () => {
+  it("renders NRAS summary when verification passes", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
-      json: async () =>
-        ({
-          ...verifiedProofMock,
-          nras: {
-            verified: true,
-            claims: {
-              hwmodel: "H100",
-              "x-nvidia-gpu-driver-version": "530",
-              "x-nvidia-gpu-vbios-version": "97.00",
-              "x-nvidia-eat-nonce": mockNonce,
-            },
-            reasons: [],
-          },
-        }) as VerificationProofResponse,
+      json: async () => ({ ...verifiedProofMock } as VerificationProofResponse),
     });
     renderComponent();
     await act(async () => fireEvent.click(screen.getByRole("button")));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const hwRows = screen.getAllByText(/H100/i);
-    expect(hwRows.length).toBeGreaterThan(0);
+    expect(screen.getByText(/NVIDIA Report/i)).toBeInTheDocument();
   });
 
   it("renders NRAS summary and copies JWT", async () => {
@@ -278,54 +293,53 @@ describe("VerificationProof component", () => {
             raw: { ok: true },
           },
           nrasRaw: { ok: true },
+          nonceCheck: {
+            expected: mockNonce,
+            attested: mockNonce,
+            nras: mockNonce,
+            valid: true,
+          },
         }}
       />
     );
     await act(async () => fireEvent.click(screen.getByRole("button")));
-    expect(screen.getByText(/NVIDIA NRAS JWT/i)).toBeInTheDocument();
+    expect(screen.getByText(/NVIDIA Report/i)).toBeInTheDocument();
     const copyButtons = screen.getAllByRole("button", { name: /Copy/i });
     await act(async () => fireEvent.click(copyButtons[0]));
     expect(clipboardSpy).toHaveBeenCalled();
     clipboardSpy.mockRestore();
   });
 
-  it("copies NVIDIA payload and renders collapsible data fields", async () => {
+  it("copies Intel quote when manual verification required", async () => {
     const clipboardSpy = vi.spyOn(navigator.clipboard, "writeText");
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () =>
         ({
           ...verifiedProofMock,
-          nras: null,
-          nrasRaw: null,
+          configMissing: { intel: true },
           attestation: {
             gateway_attestation: {
-              signing_address: mockAddress,
-              nvidia_payload: {
-                nonce: mockNonce,
-                arch: "HOPPER",
-                evidence_list: [],
-              },
+              ...(verifiedProofMock.attestation as any)?.gateway_attestation,
+              intel_quote: "fake-intel-quote",
             },
           },
+          intel: { verified: false },
         }) as VerificationProofResponse,
     });
     renderComponent();
     await act(async () => fireEvent.click(screen.getByRole("button")));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
 
-    // Copy NVIDIA payload
-    const copyBtn = screen.getAllByRole("button", { name: /Copy/i }).at(-1)!;
+    const intelTile =
+      screen.getByText(/Intel TDX Quote/i).closest("div")?.parentElement
+        ?.parentElement;
+    expect(intelTile).toBeTruthy();
+    const copyBtn = within(intelTile as HTMLElement).getByRole("button", {
+      name: /Copy/i,
+    });
     await act(async () => fireEvent.click(copyBtn));
-    expect(clipboardSpy).toHaveBeenCalled();
-
-    // Collapse/expand raw NRAS data placeholder (none present) via decode fields
-    // Use existing collapsible data fields (claims/gpus/raw) to toggle
-    const collapseButtons = screen.queryAllByRole("button", { name: /Collapse/i });
-    if (collapseButtons.length > 0) {
-      await act(async () => fireEvent.click(collapseButtons[0]));
-      expect(screen.getAllByRole("button", { name: /Expand/i }).length).toBeGreaterThan(0);
-    }
+    expect(clipboardSpy).toHaveBeenCalledWith("fake-intel-quote");
     clipboardSpy.mockRestore();
   });
 
@@ -393,21 +407,16 @@ describe("VerificationProof component", () => {
     expect(screen.getByText(/Measurement/i)).toBeInTheDocument();
   });
 
-  it("shows NRAS verification unavailable error banner", async () => {
+  it("shows retry button when proof fetch fails", async () => {
     fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () =>
-        ({
-          ...verifiedProofMock,
-          nras: null,
-          nrasRaw: null,
-        }) as VerificationProofResponse,
+      ok: false,
+      status: 500,
+      text: async () => "server error",
     });
     renderComponent();
     await act(async () => fireEvent.click(screen.getByRole("button")));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const nrasButton = screen.getByRole("button", { name: /Verify with NRAS/i });
-    expect(nrasButton).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Retry/i })).toBeInTheDocument();
   });
 
   it("surfaces fetch error banner", async () => {

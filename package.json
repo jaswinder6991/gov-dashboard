@@ -13,13 +13,13 @@
     "start": "next start",
     "lint": "eslint .",
     "test:e2e": "playwright test",
-    "test:unit": "vitest run tests/unit __tests__/utils/verification.test.ts",
+    "test:unit": "vitest run tests/unit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:drop": "drizzle-kit drop",
-    "test:coverage": "vitest run tests/unit __tests__/api __tests__/components __tests__/utils --coverage"
+    "test:coverage": "vitest run tests/unit --coverage"
   },
   "dependencies": {
     "@hot-labs/near-connect": "^0.6.2",

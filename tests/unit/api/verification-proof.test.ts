@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi, beforeEach } from "vitest";
 import handler from "@/pages/api/verification/proof";
 import type { NextApiRequest, NextApiResponse } from "next";
-import { verifiedProofMock } from "../fixtures/verification";
+import { verifiedProofMock } from "../../fixtures/verification";
 import {
   registerVerificationSession,
   clearVerificationSession,

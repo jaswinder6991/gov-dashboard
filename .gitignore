@@ -16,9 +16,6 @@ out/
 # OS
 .DS_Store
 
-# Tests
-tests/
-
 # TypeScript
 *.tsbuildinfo
 tsconfig.tsbuildinfo
@@ -26,3 +23,16 @@ tsconfig.tsbuildinfo
 # IDE
 .vscode/
 .idea/
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+trace.zip
+
+# Vitest
+*.snap
+.vitest/
+
+# Coverage
+coverage/
