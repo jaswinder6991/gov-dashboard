@@ -3,7 +3,9 @@ import {
   VerificationProof,
   type RemoteProof,
 } from "@/components/verification/VerificationProof";
+import ProposalCard from "@/components/proposal/ProposalCard";
 import type { VerificationMetadata } from "@/types/agui-events";
+import type { ProposalDisplayData } from "@/types/proposals";
 import type { PartialExpectations } from "@/utils/attestation-expectations";
 import MarkdownIt from "markdown-it";
 import DOMPurify from "dompurify";
@@ -31,6 +33,23 @@ const renderMarkdownContent = (
 ): { __html: string } => ({
   __html: DOMPurify.sanitize(markdown.render(content || "")),
 });
+
+const extractJsonFromMarkdown = (
+  content: string
+): ProposalDisplayData | null => {
+  const jsonMatch = content.match(/```json\s*\n([\s\S]*?)\n```/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[1]);
+      if (parsed.type === "proposal_list" && Array.isArray(parsed.topics)) {
+        return parsed;
+      }
+    } catch (e) {
+      console.error("Failed to parse proposal JSON:", e);
+    }
+  }
+  return null;
+};
 
 export const Message = ({
   role,
@@ -67,6 +86,9 @@ export const Message = ({
   const showProof =
     role === "assistant" && Boolean(verification || proof || remoteProof);
 
+  const proposalData =
+    role === "assistant" ? extractJsonFromMarkdown(content) : null;
+
   return (
     <div className={`flex ${alignment}`}>
       <div
@@ -87,10 +109,35 @@ export const Message = ({
             })}
           </span>
         </div>
-        <div
-          className={proseClass}
-          dangerouslySetInnerHTML={renderMarkdownContent(markdown, content)}
-        />
+        {proposalData ? (
+          <div className="space-y-4">
+            {proposalData.description && (
+              <p className="text-sm mb-3">{proposalData.description}</p>
+            )}
+            <div className="space-y-3">
+              {proposalData.topics.map((topic) => (
+                <ProposalCard
+                  key={topic.id}
+                  id={topic.id}
+                  title={topic.title}
+                  excerpt={topic.excerpt}
+                  created_at={topic.created_at}
+                  username={topic.author}
+                  topic_id={topic.id}
+                  topic_slug={topic.slug}
+                  reply_count={topic.reply_count}
+                  views={topic.views}
+                  last_posted_at={topic.last_posted_at}
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div
+            className={proseClass}
+            dangerouslySetInnerHTML={renderMarkdownContent(markdown, content)}
+          />
+        )}
         {showProof && (
           <VerificationProof
             verification={verification}

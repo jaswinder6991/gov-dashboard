@@ -3,8 +3,6 @@ import { useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { ArrowDown } from "lucide-react";
 import { Message } from "./Message";
-import { ToolMessage } from "./ToolMessage";
-import { Status } from "./Status";
 import { AgentMessage } from "./AgentMessage";
 import type MarkdownIt from "markdown-it";
 import type { VerificationMetadata } from "@/types/agui-events";
@@ -66,6 +64,8 @@ type AgentEvent =
   | ToolResultEvent
   | StatusEvent
   | SubAgentEvent;
+
+const isToolCallEvent = (event: AgentEvent): event is ToolCallEvent => event.kind === "tool_call";
 
 interface ChatMessagesProps {
   events: AgentEvent[];
@@ -163,7 +163,22 @@ export const ChatMessages = ({
     }
   };
 
+  // Find tools currently executing
+  const activeTools = events.filter(
+    (e): e is ToolCallEvent => e.kind === "tool_call" && (e.status === "running" || e.status === "pending")
+  );
+
   const renderEvent = (event: AgentEvent) => {
+    // Hide all tool/status messages from main chat
+    // Active tools are shown in the "Thinking" section below
+    if (
+      event.kind === "tool_call" ||
+      event.kind === "tool_result" ||
+      event.kind === "status"
+    ) {
+      return null;
+    }
+
     switch (event.kind) {
       case "message":
         return (
@@ -178,35 +193,6 @@ export const ChatMessages = ({
             remoteProof={event.remoteProof}
             model={model}
             markdown={markdown}
-          />
-        );
-      case "tool_call":
-        return (
-          <ToolMessage
-            key={event.id}
-            kind="tool_call"
-            toolName={event.toolName}
-            payload={event.input}
-            status={event.status}
-          />
-        );
-      case "tool_result":
-        return (
-          <ToolMessage
-            key={event.id}
-            kind="tool_result"
-            toolName={event.toolName}
-            payload={event.output}
-            status={event.status}
-          />
-        );
-      case "status":
-        return (
-          <Status
-            key={event.id}
-            label={event.label}
-            detail={event.detail}
-            level={event.level}
           />
         );
       case "sub_agent":
@@ -241,6 +227,24 @@ export const ChatMessages = ({
         ) : (
           <div className="space-y-6 max-w-4xl mx-auto">
             {events.map((event) => renderEvent(event))}
+            {/* Show active tool execution in real-time */}
+            {activeTools.length > 0 && (
+              <div className="flex justify-start">
+                <div className="bg-blue-50 border border-blue-200 rounded-2xl px-4 py-3 max-w-[80%]">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                    <p className="text-sm font-semibold text-blue-900">Thinking...</p>
+                  </div>
+                  <div className="space-y-1">
+                    {activeTools.map((tool) => (
+                      <div key={tool.id} className="text-xs text-blue-700">
+                        → {tool.toolName}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
             {showTypingIndicator && <TypingIndicator />}
           </div>
         )}
