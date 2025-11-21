@@ -1,74 +1,28 @@
 // components/chat/ChatMessages.tsx
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useMemo, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { ArrowDown } from "lucide-react";
 import { Message } from "./Message";
 import { AgentMessage } from "./AgentMessage";
 import type MarkdownIt from "markdown-it";
+import {
+  mapRoleToDisplayRoleMeta,
+  type AgentUIEvent,
+  type MessageUIEvent,
+  type ToolCallUIEvent,
+  type MessageProof,
+} from "@/types/agent-ui";
 import type { VerificationMetadata } from "@/types/agui-events";
-import type { PartialExpectations } from "@/utils/attestation-expectations";
 import type { RemoteProof } from "@/components/verification/VerificationProof";
-
-interface BaseAgentEvent {
-  id: string;
-  kind: "message" | "tool_call" | "tool_result" | "status" | "sub_agent";
-  timestamp: Date;
-}
-
-interface MessageProof extends PartialExpectations {
-  requestHash?: string;
-  responseHash?: string;
-}
-
-interface MessageEvent extends BaseAgentEvent {
-  kind: "message";
-  role: "user" | "assistant" | "system";
-  content: string;
-  messageId?: string;
-  verification?: VerificationMetadata;
-  proof?: MessageProof;
-  remoteProof?: RemoteProof | null;
-}
-
-interface ToolCallEvent extends BaseAgentEvent {
-  kind: "tool_call";
-  toolName: string;
-  input?: unknown;
-  status: "pending" | "running" | "completed" | "failed";
-}
-
-interface ToolResultEvent extends BaseAgentEvent {
-  kind: "tool_result";
-  toolName: string;
-  output?: unknown;
-  status: "pending" | "running" | "completed" | "failed";
-}
-
-interface StatusEvent extends BaseAgentEvent {
-  kind: "status";
-  label: string;
-  detail?: string;
-  level: "info" | "success" | "warning" | "error";
-}
-
-interface SubAgentEvent extends BaseAgentEvent {
-  kind: "sub_agent";
-  agentName: string;
-  phase: "spawned" | "running" | "completed" | "failed";
-  detail?: string;
-}
-
-type AgentEvent =
-  | MessageEvent
-  | ToolCallEvent
-  | ToolResultEvent
-  | StatusEvent
-  | SubAgentEvent;
-
-const isToolCallEvent = (event: AgentEvent): event is ToolCallEvent => event.kind === "tool_call";
+import {
+  ToolHistoryCard,
+  type ToolHistoryStatus,
+} from "./ToolHistoryCard";
+import ProposalCard from "@/components/proposal/ProposalCard";
+import type { ProposalDisplayData } from "@/types/proposals";
 
 interface ChatMessagesProps {
-  events: AgentEvent[];
+  events: AgentUIEvent[];
   isLoading: boolean;
   isInitialized: boolean;
   showTypingIndicator: boolean;
@@ -120,6 +74,57 @@ const ScrollToBottom = ({
   );
 };
 
+type TurnStatus = ToolHistoryStatus;
+
+interface TurnInfo {
+  turnNumber: number;
+  tools: ToolCallUIEvent[];
+  assistantMessages: MessageUIEvent[];
+  status: TurnStatus;
+  verification?: VerificationMetadata;
+  proof?: MessageProof;
+  remoteProof?: RemoteProof | null;
+  proposalList?: ProposalDisplayData | null;
+}
+
+const parseProposalListPayload = (
+  payload?: string | null
+): ProposalDisplayData | null => {
+  if (!payload) return null;
+  try {
+    const parsed = JSON.parse(payload);
+    if (parsed.type === "proposal_list" && Array.isArray(parsed.topics)) {
+      return parsed as ProposalDisplayData;
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return null;
+};
+
+const extractProposalListFromContent = (
+  content: string
+): ProposalDisplayData | null => {
+  const codeMatch = content.match(/```json\s*\n([\s\S]*?)```/i);
+  const fromCodeBlock = parseProposalListPayload(codeMatch?.[1]);
+  if (fromCodeBlock) return fromCodeBlock;
+
+  const trimmed = content.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    const direct = parseProposalListPayload(trimmed);
+    if (direct) return direct;
+  }
+  return null;
+};
+
+const extractProposalListFromTool = (
+  tool: ToolCallUIEvent
+): ProposalDisplayData | null => {
+  if (!tool.output || typeof tool.output !== "string") return null;
+  return parseProposalListPayload(tool.output);
+};
+
+
 export const ChatMessages = ({
   events,
   isLoading,
@@ -135,6 +140,84 @@ export const ChatMessages = ({
   const scrollRef = useRef<HTMLDivElement>(null);
   const footerHeight = Math.max(bottomOffset, 160);
   const buttonOffset = footerHeight + 30;
+
+  const lastUserMessage = (() => {
+    const userMessages = events.filter(
+      (e) => e.kind === "message" && e.role === "user"
+    );
+    return userMessages[userMessages.length - 1];
+  })();
+
+  const lastUserTurnNumber = lastUserMessage?.turnNumber || 0;
+  const currentTurnNumber = lastUserTurnNumber;
+
+  const { turnInfoMap, relevantTurnInfos } = useMemo(() => {
+    const map = new Map<number, TurnInfo>();
+
+    const buckets = events.reduce<Record<number, TurnInfo>>((acc, event) => {
+      if (event.kind !== "tool_call" && event.kind !== "message") {
+        return acc;
+      }
+      const existing =
+        acc[event.turnNumber] ??
+        {
+          turnNumber: event.turnNumber,
+          tools: [],
+          assistantMessages: [],
+          status: "awaiting_response" as TurnStatus,
+          verification: undefined,
+          proof: undefined,
+          remoteProof: undefined,
+          proposalList: null,
+        };
+      if (event.kind === "tool_call") {
+        existing.tools = [...existing.tools, event];
+        if (!existing.proposalList) {
+          existing.proposalList = extractProposalListFromTool(event);
+        }
+      } else if (event.kind === "message" && event.role === "assistant") {
+        existing.assistantMessages = [...existing.assistantMessages, event];
+
+        if (event.proof?.stage === "initial_reasoning") {
+          existing.verification = event.verification;
+          existing.proof = event.proof;
+          existing.remoteProof = event.remoteProof ?? null;
+        }
+      }
+      acc[event.turnNumber] = existing;
+      return acc;
+    }, {});
+
+    const relevant = Object.values(buckets)
+      .filter((info) => info.tools.length > 0)
+      .map((info) => {
+        const hasActive = info.tools.some(
+          (tool) => tool.status === "running" || tool.status === "pending"
+        );
+        const hasResponse = info.assistantMessages.some(
+          (msg) => msg.content.length > 0
+        );
+        info.status = hasActive
+          ? "active"
+          : hasResponse
+          ? "completed"
+          : "awaiting_response";
+        map.set(info.turnNumber, info);
+        return info;
+      })
+      .sort((a, b) => a.turnNumber - b.turnNumber);
+
+    return {
+      turnInfoMap: map,
+      relevantTurnInfos: relevant,
+    };
+  }, [events]);
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[ChatMessages Debug]", {
+      totalEvents: events.length,
+      currentTurnNumber,
+    });
+  }
 
   useEffect(() => {
     if (!scrollRef.current) return;
@@ -163,14 +246,8 @@ export const ChatMessages = ({
     }
   };
 
-  // Find tools currently executing
-  const activeTools = events.filter(
-    (e): e is ToolCallEvent => e.kind === "tool_call" && (e.status === "running" || e.status === "pending")
-  );
-
-  const renderEvent = (event: AgentEvent) => {
+  const renderEvent = (event: AgentUIEvent, _index: number) => {
     // Hide all tool/status messages from main chat
-    // Active tools are shown in the "Thinking" section below
     if (
       event.kind === "tool_call" ||
       event.kind === "tool_result" ||
@@ -179,21 +256,85 @@ export const ChatMessages = ({
       return null;
     }
 
+    const turnInfo = turnInfoMap.get(event.turnNumber);
+    const displayRoleMeta =
+      event.kind === "message" ? mapRoleToDisplayRoleMeta(event.role) : null;
+    const shouldShowToolHistory =
+      event.kind === "message" &&
+      displayRoleMeta?.role === "assistant" &&
+      event.content.length > 0 &&
+      turnInfo !== undefined &&
+      turnInfo.tools.length > 0;
+
+    const messageHasProposalJson =
+      event.kind === "message"
+        ? Boolean(extractProposalListFromContent(event.content))
+        : false;
+
+    const proposalListElement =
+      !messageHasProposalJson &&
+      turnInfo?.proposalList &&
+      turnInfo.proposalList.topics.length > 0 ? (
+        <div className="mt-3 space-y-3">
+          {turnInfo.proposalList.description && (
+            <p className="text-sm text-muted-foreground">
+              {turnInfo.proposalList.description}
+            </p>
+          )}
+          <div className="space-y-3">
+            {turnInfo.proposalList.topics.map((topic, index) => (
+              <ProposalCard
+                key={`${topic.id}-${index}`}
+                id={topic.id}
+                title={topic.title}
+                excerpt={topic.excerpt}
+                created_at={topic.created_at}
+                username={topic.author}
+                topic_id={topic.id}
+                topic_slug={topic.slug}
+                reply_count={topic.reply_count}
+                views={topic.views}
+                last_posted_at={topic.last_posted_at}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null;
+
+    const toolHistoryElement =
+      shouldShowToolHistory && turnInfo ? (
+        <div key={`tools-after-${event.id}`} className="flex justify-start mt-4">
+          <ToolHistoryCard
+            status={turnInfo.status}
+            tools={turnInfo.tools}
+            verification={turnInfo.verification}
+            proof={turnInfo.proof}
+            remoteProof={turnInfo.remoteProof}
+            model={model}
+          />
+        </div>
+      ) : null;
+
     switch (event.kind) {
       case "message":
         return (
-          <Message
-            key={event.id}
-            role={event.role}
-            content={event.content}
-            timestamp={event.timestamp}
-            messageId={event.messageId}
-            verification={event.verification}
-            proof={event.proof}
-            remoteProof={event.remoteProof}
-            model={model}
-            markdown={markdown}
-          />
+          <Fragment key={event.id}>
+            <Message
+              role={displayRoleMeta?.role ?? "assistant"}
+              label={displayRoleMeta?.label}
+              rawRole={event.role}
+              content={event.content}
+              timestamp={event.timestamp}
+              messageId={event.messageId}
+              verification={event.verification}
+              proof={event.proof}
+              remoteProof={event.remoteProof}
+              model={model}
+              markdown={markdown}
+            />
+            {proposalListElement}
+            {toolHistoryElement}
+          </Fragment>
         );
       case "sub_agent":
         return (
@@ -226,25 +367,7 @@ export const ChatMessages = ({
           </div>
         ) : (
           <div className="space-y-6 max-w-4xl mx-auto">
-            {events.map((event) => renderEvent(event))}
-            {/* Show active tool execution in real-time */}
-            {activeTools.length > 0 && (
-              <div className="flex justify-start">
-                <div className="bg-blue-50 border border-blue-200 rounded-2xl px-4 py-3 max-w-[80%]">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-                    <p className="text-sm font-semibold text-blue-900">Thinking...</p>
-                  </div>
-                  <div className="space-y-1">
-                    {activeTools.map((tool) => (
-                      <div key={tool.id} className="text-xs text-blue-700">
-                        → {tool.toolName}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
+            {events.map((event, index) => renderEvent(event, index))}
             {showTypingIndicator && <TypingIndicator />}
           </div>
         )}

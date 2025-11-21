@@ -2,7 +2,7 @@
  * NEAR AI Cloud Agent API Route using AG-UI Protocol
  */
 
-import { createHash } from "crypto";
+import { PassThrough } from "stream";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requestEvaluation } from "@/server/screening";
 import {
@@ -12,7 +12,10 @@ import {
   type MessageRole,
   type ProposalAgentState,
 } from "@/types/agui-events";
-import { extractVerificationMetadata } from "@/utils/verification";
+import {
+  extractVerificationMetadata,
+  normalizeSignaturePayload,
+} from "@/utils/verification";
 import type { Evaluation } from "@/types/evaluation";
 import { AGENT_MODEL, buildProposalAgentRequest } from "@/utils/agent-tools";
 import {
@@ -21,6 +24,7 @@ import {
 } from "@/server/verificationSessions";
 import { servicesConfig } from "@/config/services";
 import type { DiscourseSearchResponse } from "@/types/discourse";
+import { extractHashesFromSignedText } from "@/utils/request-hash";
 
 interface AgentRequestBody {
   messages: Array<{ role: MessageRole; content: string }>;
@@ -37,6 +41,7 @@ const APP_BASE_URL =
 const PROPOSALS_CATEGORY_ID = Number(
   process.env.DISCOURSE_PROPOSALS_CATEGORY_ID || 168
 );
+const NEAR_API_BASE = "https://cloud-api.near.ai/v1";
 
 type ToolCallArgs = {
   title?: string;
@@ -116,6 +121,66 @@ async function searchDiscourse(
   };
 }
 
+async function fetchCanonicalHashes(
+  preferredId: string | undefined,
+  fallbackId: string | undefined,
+  model: string
+): Promise<{ requestHash: string; responseHash: string } | null> {
+  const candidates = Array.from(
+    new Set(
+      [preferredId, fallbackId].filter(
+        (value): value is string => typeof value === "string" && value.length > 0
+      )
+    )
+  );
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  for (const id of candidates) {
+    try {
+      const signatureUrl = `${NEAR_API_BASE}/signature/${encodeURIComponent(
+        id
+      )}?model=${encodeURIComponent(model)}&signing_algo=ecdsa`;
+      const response = await fetch(signatureUrl, {
+        headers: {
+          Authorization: `Bearer ${process.env.NEAR_AI_CLOUD_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        console.warn(
+          `[Agent] Failed to fetch signature for hash extraction (${id}): ${response.status}`
+        );
+        continue;
+      }
+
+      const data = await response.json();
+      const signaturePayload =
+        normalizeSignaturePayload(data.signature ?? data) ||
+        normalizeSignaturePayload(data);
+      const signedText =
+        signaturePayload?.text ||
+        (typeof data?.text === "string" ? data.text : null);
+      const hashes = extractHashesFromSignedText(signedText);
+
+      if (hashes) {
+        return hashes;
+      }
+
+      console.warn("[Agent] Unable to parse hashes from signed text", {
+        id,
+      });
+    } catch (error) {
+      console.error("[Agent] Error fetching canonical hashes:", error);
+    }
+  }
+
+  return null;
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -125,7 +190,6 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Extract IDs early so they're available in catch block
   const body = req.body as AgentRequestBody;
   const thread = body.threadId || generateId("thread");
   const run = body.runId || generateId("run");
@@ -133,6 +197,17 @@ export default async function handler(
     APP_BASE_URL ||
     req.headers.origin ||
     (req.headers.host ? `http://${req.headers.host}` : "http://localhost:3000");
+  let stream: PassThrough | null = null;
+  let secondVerificationId: string | undefined;
+  let secondNonce: string | undefined;
+  let secondRemoteVerificationId: string | undefined;
+  let closeStream = () => {
+    if (stream && !stream.destroyed) {
+      stream.end();
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  };
   try {
     const { messages, state, verificationId, verificationNonce } = body;
 
@@ -163,24 +238,15 @@ export default async function handler(
     });
 
     const requestBodyString = JSON.stringify(requestBody);
-    const requestHash = createHash("sha256")
-      .update(requestBodyString)
-      .digest("hex");
 
     if (verificationId) {
-      registerVerificationSession(
-        verificationId,
-        verificationNonce,
-        requestHash,
-        null
-      );
+      registerVerificationSession(verificationId, verificationNonce, null, null);
     }
 
     console.log("[Agent] Tool choice:", toolChoice);
     if (verificationId) {
       console.log("[verification][agent] request prepared", {
         verificationId,
-        requestHash,
       });
     }
 
@@ -230,11 +296,63 @@ export default async function handler(
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
+    res.flushHeaders?.();
+
+    stream = new PassThrough();
+    stream.pipe(res);
+    let streamClosed = false;
+    closeStream = () => {
+      if (!streamClosed) {
+        streamClosed = true;
+        if (stream && !stream.destroyed) {
+          stream.end();
+        } else {
+          res.end();
+        }
+      }
+    };
+
+    req.on("close", () => {
+      console.log("[Agent] Client disconnected");
+      closeStream();
+    });
+
+    stream.on("error", (error) => {
+      console.error("[Agent] Stream error:", error);
+      closeStream();
+    });
 
     // Helper to write events
+    const maybeUpdateHashesFromEvent = (event: AGUIEvent) => {
+      if (
+        event.type === EventType.CUSTOM &&
+        event.name === "verification" &&
+        event.value &&
+        typeof event.value === "object"
+      ) {
+        const verificationIdValue = (event.value as any).verificationId;
+        const requestHashValue = (event.value as any).requestHash;
+        const responseHashValue = (event.value as any).responseHash;
+
+        if (typeof verificationIdValue === "string") {
+          updateVerificationHashes(verificationIdValue, {
+            requestHash:
+              typeof requestHashValue === "string" ? requestHashValue : undefined,
+            responseHash:
+              typeof responseHashValue === "string" ? responseHashValue : undefined,
+          });
+        }
+      }
+    };
+
     const writeEvent = (event: AGUIEvent) => {
-      const data = JSON.stringify(event);
-      res.write(`data: ${data}\n\n`);
+      maybeUpdateHashesFromEvent(event);
+      const payload = `data: ${JSON.stringify(event)}\n\n`;
+      if (stream) {
+        stream.write(payload);
+      } else {
+        res.write(payload);
+      }
     };
 
     // Emit RUN_STARTED
@@ -249,7 +367,6 @@ export default async function handler(
     const decoder = new TextDecoder();
     let buffer = "";
     let done = false;
-    let rawUpstreamResponse = "";
 
     const assistantMessageId = generateId("msg");
     let assistantMessageStarted = false;
@@ -397,7 +514,6 @@ export default async function handler(
       const { value, done: readerDone } = await reader.read();
       if (value) {
         const chunk = decoder.decode(value, { stream: true });
-        rawUpstreamResponse += chunk;
         buffer += chunk;
         let newlineIndex: number;
         while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
@@ -459,10 +575,7 @@ export default async function handler(
       }
     }
 
-    const trailingChunk = decoder.decode();
-    if (trailingChunk) {
-      rawUpstreamResponse += trailingChunk;
-    }
+    decoder.decode();
 
     if (assistantMessageStarted) {
       writeEvent({
@@ -518,7 +631,8 @@ export default async function handler(
         timestamp: Date.now(),
       });
 
-      return res.end();
+      closeStream();
+      return;
     }
 
     if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
@@ -536,9 +650,40 @@ export default async function handler(
       for (const toolCall of message.tool_calls) {
         const toolCallId = toolCall.id;
         const toolName = toolCall.function.name;
-        const args = JSON.parse(
-          toolCall.function.arguments || "{}"
-        ) as ToolCallArgs;
+        let args: ToolCallArgs | null = null;
+
+        try {
+          args = JSON.parse(toolCall.function.arguments || "{}") as ToolCallArgs;
+        } catch (parseError) {
+          const errorMessage =
+            parseError instanceof Error
+              ? parseError.message
+              : "Invalid tool arguments";
+          const errorResult = {
+            error: `Failed to parse tool arguments: ${errorMessage}`,
+          };
+
+          writeEvent({
+            type: EventType.TOOL_CALL_RESULT,
+            messageId: generateId("tool_result"),
+            toolCallId,
+            content: JSON.stringify(errorResult, null, 2),
+            role: "tool",
+            timestamp: Date.now(),
+          });
+
+          toolMessages.push({
+            role: "tool",
+            content: JSON.stringify(errorResult),
+            tool_call_id: toolCallId,
+          });
+
+          continue;
+        }
+
+        if (!args) {
+          continue;
+        }
 
         let result:
           | Evaluation
@@ -795,6 +940,43 @@ export default async function handler(
 
       const secondRequestBodyString = JSON.stringify(secondRequestBody);
 
+      if (verificationId) {
+        secondVerificationId = `${verificationId}-synthesis`;
+        try {
+          const secondNonceResp = await fetch(
+            `${runtimeBaseUrl}/api/verification/register-session`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ verificationId: secondVerificationId }),
+            }
+          );
+          if (!secondNonceResp.ok) {
+            console.error(
+              "[Agent] Failed to register second verification session",
+              { status: secondNonceResp.status }
+            );
+          } else {
+            const noncePayload = (await secondNonceResp.json()) as {
+              nonce?: string;
+            };
+            secondNonce = noncePayload?.nonce;
+          }
+        } catch (error) {
+          console.error(
+            "[Agent] Error registering second verification session",
+            error
+          );
+        }
+
+        registerVerificationSession(
+          secondVerificationId,
+          secondNonce,
+          null,
+          null
+        );
+      }
+
       console.log("[Agent] Making second completion with tool results", {
         toolCount: toolMessages.length,
       });
@@ -809,6 +991,10 @@ export default async function handler(
           headers: {
             Authorization: `Bearer ${process.env.NEAR_AI_CLOUD_API_KEY}`,
             "Content-Type": "application/json",
+            ...(secondVerificationId
+              ? { "X-Verification-Id": secondVerificationId }
+              : {}),
+            ...(secondNonce ? { "X-Nonce": secondNonce } : {}),
           },
           body: secondRequestBodyString,
           signal: secondController.signal,
@@ -829,16 +1015,18 @@ export default async function handler(
         const secondReader = secondNearAIResponse.body.getReader();
         const secondDecoder = new TextDecoder();
         let secondBuffer = "";
-        let secondRawResponse = "";
         let secondMessageStarted = false;
         let secondContent = "";
         const secondMessageId = generateId("msg");
+        let secondDone = false;
 
-        while (true) {
-          const { value, done: secondDone } = await secondReader.read();
+        while (!secondDone) {
+          const { value, done: readerDone } = await secondReader.read();
+          if (readerDone) {
+            secondDone = true;
+          }
           if (value) {
             const chunk = secondDecoder.decode(value, { stream: true });
-            secondRawResponse += chunk;
             secondBuffer += chunk;
 
             let newlineIndex: number;
@@ -849,7 +1037,11 @@ export default async function handler(
               if (!line) continue;
               if (line.startsWith("data:")) {
                 const data = line.slice(5).trim();
-                if (!data || data === "[DONE]") {
+                if (data === "[DONE]") {
+                  secondDone = true;
+                  break;
+                }
+                if (!data) {
                   continue;
                 }
 
@@ -857,6 +1049,10 @@ export default async function handler(
                   const parsed = JSON.parse(data);
                   const choice = parsed.choices?.[0];
                   const delta = choice?.delta;
+                  const verification = extractVerificationMetadata(parsed, delta);
+                  if (verification?.messageId) {
+                    secondRemoteVerificationId = verification.messageId;
+                  }
 
                   const deltaContent = delta?.content;
                   let text = "";
@@ -902,14 +1098,9 @@ export default async function handler(
               }
             }
           }
-
-          if (secondDone) break;
         }
 
-        const secondTrailingChunk = secondDecoder.decode();
-        if (secondTrailingChunk) {
-          secondRawResponse += secondTrailingChunk;
-        }
+        secondDecoder.decode();
 
         if (secondMessageStarted) {
           writeEvent({
@@ -921,35 +1112,86 @@ export default async function handler(
       }
     }
 
-    if (verificationId) {
-      const responseHash = createHash("sha256")
-        .update(rawUpstreamResponse)
-        .digest("hex");
-
-      updateVerificationHashes(verificationId, {
-        requestHash,
-        responseHash,
-      });
-
-      const verificationPayload = {
-        messageId: remoteVerificationId || verificationId,
+    if (verificationId && remoteVerificationId) {
+      const canonicalHashes = await fetchCanonicalHashes(
+        remoteVerificationId,
         verificationId,
-        requestHash,
-        responseHash,
-        nonce: verificationNonce ?? null,
-      };
-
-      console.log(
-        "[verification][agent] response complete",
-        verificationPayload
+        AGENT_MODEL
       );
 
-      writeEvent({
-        type: EventType.CUSTOM,
-        name: "verification",
-        value: verificationPayload,
-        timestamp: Date.now(),
-      });
+      if (canonicalHashes) {
+        updateVerificationHashes(verificationId, {
+          requestHash: canonicalHashes.requestHash,
+          responseHash: canonicalHashes.responseHash,
+        });
+
+        const verificationPayload = {
+          messageId: remoteVerificationId,
+          verificationId,
+          requestHash: canonicalHashes.requestHash,
+          responseHash: canonicalHashes.responseHash,
+          nonce: verificationNonce ?? null,
+          stage: "initial_reasoning",
+        };
+
+        console.log(
+          "[verification][agent] initial reasoning verified",
+          verificationPayload
+        );
+
+        writeEvent({
+          type: EventType.CUSTOM,
+          name: "verification",
+          value: verificationPayload,
+          timestamp: Date.now(),
+        });
+      } else {
+        console.warn(
+          "[verification][agent] Unable to fetch canonical hashes for initial reasoning",
+          { verificationId, remoteVerificationId }
+        );
+      }
+    }
+
+    if (secondVerificationId && secondRemoteVerificationId) {
+      const secondCanonicalHashes = await fetchCanonicalHashes(
+        secondRemoteVerificationId,
+        secondVerificationId,
+        AGENT_MODEL
+      );
+
+      if (secondCanonicalHashes) {
+        updateVerificationHashes(secondVerificationId, {
+          requestHash: secondCanonicalHashes.requestHash,
+          responseHash: secondCanonicalHashes.responseHash,
+        });
+
+        const secondVerificationPayload = {
+          messageId: secondRemoteVerificationId,
+          verificationId: secondVerificationId,
+          requestHash: secondCanonicalHashes.requestHash,
+          responseHash: secondCanonicalHashes.responseHash,
+          nonce: secondNonce ?? null,
+          stage: "final_synthesis",
+        };
+
+        console.log(
+          "[verification][agent] second completion verified",
+          secondVerificationPayload
+        );
+
+        writeEvent({
+          type: EventType.CUSTOM,
+          name: "verification",
+          value: secondVerificationPayload,
+          timestamp: Date.now(),
+        });
+      } else {
+        console.warn(
+          "[verification][agent] Unable to fetch canonical hashes for second completion",
+          { secondVerificationId, secondRemoteVerificationId }
+        );
+      }
     }
 
     // Emit RUN_FINISHED
@@ -960,15 +1202,19 @@ export default async function handler(
       timestamp: Date.now(),
     });
 
-    res.end();
+    closeStream();
   } catch (error: unknown) {
     console.error("[Agent] Error:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
 
     // Helper to write events (redeclared for catch block scope)
     const writeEvent = (event: AGUIEvent) => {
-      const data = JSON.stringify(event);
-      res.write(`data: ${data}\n\n`);
+      const payload = `data: ${JSON.stringify(event)}\n\n`;
+      if (stream) {
+        stream.write(payload);
+      } else {
+        res.write(payload);
+      }
     };
 
     if (error instanceof Error && error.name === "AbortError") {
@@ -984,7 +1230,8 @@ export default async function handler(
         runId: run,
         timestamp: Date.now(),
       });
-      return res.end();
+      closeStream();
+      return;
     }
 
     const errorEvent: AGUIEvent = {
@@ -993,7 +1240,7 @@ export default async function handler(
       code: "AGENT_ERROR",
       timestamp: Date.now(),
     };
-    res.write(`data: ${JSON.stringify(errorEvent)}\n\n`);
-    res.end();
+    writeEvent(errorEvent);
+    closeStream();
   }
 }

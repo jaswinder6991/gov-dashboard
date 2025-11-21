@@ -96,6 +96,8 @@ export interface VerificationProofResponse {
       reason?: string;
     };
   };
+  requestHash?: string | null;
+  responseHash?: string | null;
 }
 
 export interface NrasVerificationRequest {

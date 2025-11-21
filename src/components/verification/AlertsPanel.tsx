@@ -10,6 +10,11 @@ export interface AlertsPanelProps {
   verificationId?: string;
   loading: boolean;
   fetchError: string | null;
+  hashMismatch?: boolean;
+  attestedRequestHash?: string | null;
+  attestedResponseHash?: string | null;
+  recordedRequestHash?: string | null;
+  recordedResponseHash?: string | null;
 }
 
 export function AlertsPanel({
@@ -19,6 +24,11 @@ export function AlertsPanel({
   verificationId,
   loading,
   fetchError,
+  hashMismatch = false,
+  attestedRequestHash,
+  attestedResponseHash,
+  recordedRequestHash,
+  recordedResponseHash,
 }: AlertsPanelProps) {
   return (
     <>
@@ -43,6 +53,36 @@ export function AlertsPanel({
           <AlertDescription className="text-amber-800">
             Proofs are only accessible for 5 minutes after completion, or indefinitely once queried
             within that window.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {hashMismatch && (
+        <Alert variant="default" className="border-amber-200 bg-amber-50">
+          <AlertCircle className="h-4 w-4 text-amber-600" />
+          <AlertTitle className="text-amber-900">
+            Signed hashes differ from session hashes
+          </AlertTitle>
+          <AlertDescription className="text-amber-800 space-y-1">
+            <p>
+              The TEE-signed request/response hashes do not match the values recorded in this
+              session. We&rsquo;re using the attested hashes for verification since they are part of
+              the signed payload.
+            </p>
+            <div className="text-[11px] font-mono break-all text-muted-foreground">
+              <div>
+                Signed request: {attestedRequestHash || "Unknown"}{" "}
+                {recordedRequestHash &&
+                  recordedRequestHash !== attestedRequestHash &&
+                  `(session recorded ${recordedRequestHash})`}
+              </div>
+              <div>
+                Signed response: {attestedResponseHash || "Unknown"}{" "}
+                {recordedResponseHash &&
+                  recordedResponseHash !== attestedResponseHash &&
+                  `(session recorded ${recordedResponseHash})`}
+              </div>
+            </div>
           </AlertDescription>
         </Alert>
       )}

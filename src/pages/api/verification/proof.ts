@@ -126,6 +126,7 @@ export default async function handler(
 
   const {
     verificationId,
+    messageId,
     model = "openai/gpt-oss-120b",
     signingAlgo = "ecdsa",
     nonce: clientProvidedNonce,
@@ -144,9 +145,15 @@ export default async function handler(
       error: "verificationId is required",
     });
   }
+  if (messageId && typeof messageId !== "string") {
+    return res.status(400).json({
+      error: "messageId must be a string when provided",
+    });
+  }
 
   console.log("[verification] Fetching proof:", {
     verificationId,
+    messageId,
     requestHash: req.body?.requestHash,
     responseHash: req.body?.responseHash,
     nonce: clientProvidedNonce,
@@ -361,10 +368,11 @@ export default async function handler(
       )
     );
 
+    const signatureLookupId = messageId || verificationId;
     const signaturePromise = fetchWithBackoff(() =>
       safeFetch(
         `${NEAR_API_BASE}/signature/${encodeURIComponent(
-          verificationId
+          signatureLookupId
         )}?model=${encodeURIComponent(model)}&signing_algo=${encodeURIComponent(
           signingAlgo
         )}`,
@@ -393,7 +401,7 @@ export default async function handler(
         status: signatureResp.status,
         statusText: signatureResp.statusText,
         error: errorText,
-        url: `${NEAR_API_BASE}/signature/${verificationId}?model=${model}&signing_algo=${signingAlgo}`,
+        url: `${NEAR_API_BASE}/signature/${signatureLookupId}?model=${model}&signing_algo=${signingAlgo}`,
       });
       proof.signature = null;
     }
@@ -871,6 +879,16 @@ export default async function handler(
           ? `${effectiveRequestHash}:${effectiveResponseHash}`
           : null,
     });
+
+    if (effectiveRequestHash || effectiveResponseHash) {
+      updateVerificationHashes(verificationId, {
+        requestHash: effectiveRequestHash,
+        responseHash: effectiveResponseHash,
+      });
+    }
+
+    proof.requestHash = effectiveRequestHash ?? sessionRequestHash ?? null;
+    proof.responseHash = effectiveResponseHash ?? sessionResponseHash ?? null;
 
     console.log("[verification/proof] Calling deriveVerificationState with:", {
       hasProof: !!proof,

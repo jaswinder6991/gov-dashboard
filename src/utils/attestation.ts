@@ -82,23 +82,47 @@ export function deriveVerificationState({
   const localSignedText =
     requestHash && responseHash ? `${requestHash}:${responseHash}` : null;
 
+  const normalize = (value?: string | null) =>
+    typeof value === "string" ? value.trim().toLowerCase() : null;
+  const normalizedSignatureText = normalize(signatureText);
+  const normalizedRequestHash = normalize(requestHash);
+  const normalizedResponseHash = normalize(responseHash);
+
   // Hash step
-  if (!localSignedText || !signatureText) {
+  if (!normalizedSignatureText || !normalizedRequestHash || !normalizedResponseHash) {
     steps.hash = {
       status: "pending",
       message: "Provide request and response hashes to validate.",
     };
-  } else if (
-    localSignedText.trim().toLowerCase() !== signatureText.trim().toLowerCase()
-  ) {
-    steps.hash = {
-      status: "error",
-      message: "Hash mismatch",
-      details: `Expected: ${localSignedText}\nReceived: ${signatureText}`,
-    };
-    reasons.push("Hash mismatch");
   } else {
-    steps.hash = { status: "success", message: "Hashes match" };
+    const exactMatch =
+      normalizedSignatureText ===
+      `${normalizedRequestHash}:${normalizedResponseHash}`;
+    const containsRequest = normalizedSignatureText.includes(
+      normalizedRequestHash
+    );
+    const containsResponse = normalizedSignatureText.includes(
+      normalizedResponseHash
+    );
+
+    if (exactMatch || (containsRequest && containsResponse)) {
+      steps.hash = { status: "success", message: "Hashes match" };
+    } else {
+      const missingPieces = [
+        containsRequest ? null : "request hash",
+        containsResponse ? null : "response hash",
+      ]
+        .filter(Boolean)
+        .join(" & ");
+      steps.hash = {
+        status: "error",
+        message: missingPieces
+          ? `Signature text missing ${missingPieces}`
+          : "Hash mismatch",
+        details: `Expected: ${localSignedText}\nReceived: ${signatureText}`,
+      };
+      reasons.push("Hash mismatch");
+    }
   }
 
   let recoveredAddress: string | null = null;

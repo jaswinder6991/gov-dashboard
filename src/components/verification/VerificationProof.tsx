@@ -24,6 +24,8 @@ import {
 } from "@/utils/attestation-expectations";
 import { ethers } from "ethers";
 import { deriveVerificationState } from "@/utils/attestation";
+import { normalizeSignaturePayload } from "@/utils/verification";
+import { extractHashesFromSignedText } from "@/utils/request-hash";
 import { VerificationStatusPill } from "@/components/verification/VerificationStatusPill";
 import { ProofStatusHeader } from "@/components/verification/ProofStatusHeader";
 import { VerificationTimeline } from "@/components/verification/VerificationTimeline";
@@ -150,40 +152,51 @@ export function VerificationProof({
 
   // Enhanced verification state with step tracking
 
-  const normalizeSignature = useCallback((sig: any) => {
-    if (!sig) return null;
+  const signaturePayload = useMemo(
+    () => normalizeSignaturePayload(remoteProof?.signature),
+    [remoteProof?.signature]
+  );
 
-    // Handle simple string
-    if (typeof sig === "string") {
-      return { signature: sig };
+  const attestedHashes = useMemo(
+    () => extractHashesFromSignedText(signaturePayload?.text),
+    [signaturePayload?.text]
+  );
+
+  const effectiveRequestHash = useMemo(() => {
+    return (
+      attestedHashes?.requestHash ||
+      remoteProof?.requestHash ||
+      requestHash ||
+      null
+    );
+  }, [attestedHashes, remoteProof?.requestHash, requestHash]);
+
+  const effectiveResponseHash = useMemo(() => {
+    return (
+      attestedHashes?.responseHash ||
+      remoteProof?.responseHash ||
+      responseHash ||
+      null
+    );
+  }, [attestedHashes, remoteProof?.responseHash, responseHash]);
+
+  const hashMismatch = useMemo(() => {
+    if (
+      !attestedHashes ||
+      !requestHash ||
+      !responseHash ||
+      !attestedHashes.requestHash ||
+      !attestedHashes.responseHash
+    ) {
+      return false;
     }
 
-    // Handle common wrapped shapes
-    const candidates = [
-      sig,
-      sig?.data,
-      sig?.result,
-      sig?.signature ? sig : null,
-    ].filter(Boolean);
-
-    for (const candidate of candidates) {
-      if (
-        candidate &&
-        (candidate.signature || candidate.text || candidate.signing_address)
-      ) {
-        return {
-          signature: candidate.signature,
-          text: candidate.text,
-          signing_address: candidate.signing_address,
-          signing_algo: candidate.signing_algo,
-        };
-      }
-    }
-
-    return null;
-  }, []);
-
-  const signaturePayload = normalizeSignature(remoteProof?.signature);
+    const normalize = (value: string) => value.trim().toLowerCase();
+    return (
+      normalize(attestedHashes.requestHash) !== normalize(requestHash) ||
+      normalize(attestedHashes.responseHash) !== normalize(responseHash)
+    );
+  }, [attestedHashes, requestHash, responseHash]);
 
   const attestationPayload = (() => {
     const att = remoteProof?.attestation;
@@ -609,15 +622,15 @@ export function VerificationProof({
       }
 
       const hashesValid = Boolean(
-        requestHash &&
-          responseHash &&
+        effectiveRequestHash &&
+          effectiveResponseHash &&
           signaturePayload.text &&
           signaturePayload.text
             .toLowerCase()
-            .includes(requestHash.toLowerCase()) &&
+            .includes(effectiveRequestHash.toLowerCase()) &&
           signaturePayload.text
             .toLowerCase()
-            .includes(responseHash.toLowerCase())
+            .includes(effectiveResponseHash.toLowerCase())
       );
 
       const nonceValid = Boolean(
@@ -721,8 +734,8 @@ export function VerificationProof({
   }, [
     attestationPayload,
     remoteProof,
-    requestHash,
-    responseHash,
+    effectiveRequestHash,
+    effectiveResponseHash,
     signaturePayload,
     verifyNRASJWT,
     nrasData,
@@ -841,9 +854,9 @@ export function VerificationProof({
   ]);
 
   const localSignedText = useMemo(() => {
-    if (!requestHash || !responseHash) return null;
-    return `${requestHash}:${responseHash}`;
-  }, [requestHash, responseHash]);
+    if (!effectiveRequestHash || !effectiveResponseHash) return null;
+    return `${effectiveRequestHash}:${effectiveResponseHash}`;
+  }, [effectiveRequestHash, effectiveResponseHash]);
 
   const hasAnyData = useMemo(
     () =>
@@ -886,8 +899,8 @@ export function VerificationProof({
 
     return deriveVerificationState({
       proof: remoteProof,
-      requestHash,
-      responseHash,
+      requestHash: effectiveRequestHash,
+      responseHash: effectiveResponseHash,
       signatureText: signaturePayload?.text || null,
       signature: signaturePayload?.signature || null,
       signatureAddress: signaturePayload?.signing_address || null,
@@ -1037,9 +1050,11 @@ export function VerificationProof({
         model: model || null,
       },
       hashes: {
-        request: requestHash || null,
-        response: responseHash || null,
+        request: effectiveRequestHash || null,
+        response: effectiveResponseHash || null,
         combined: localSignedText || null,
+        recordedRequest: requestHash || null,
+        recordedResponse: responseHash || null,
       },
       verification: {
         inline: verification || null,
@@ -1071,6 +1086,8 @@ export function VerificationProof({
     model,
     requestHash,
     responseHash,
+    effectiveRequestHash,
+    effectiveResponseHash,
     localSignedText,
     verification,
     derivedStatus,
@@ -1247,6 +1264,11 @@ export function VerificationProof({
                 verificationId={verificationId}
                 loading={loading}
                 fetchError={fetchError}
+                hashMismatch={hashMismatch}
+                attestedRequestHash={attestedHashes?.requestHash}
+                attestedResponseHash={attestedHashes?.responseHash}
+                recordedRequestHash={requestHash || remoteProof?.requestHash || null}
+                recordedResponseHash={responseHash || remoteProof?.responseHash || null}
               />
 
               {hasInlineProof && (

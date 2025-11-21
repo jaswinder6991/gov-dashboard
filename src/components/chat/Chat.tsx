@@ -1,69 +1,31 @@
 // components/chat/Chat.tsx
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useReducer } from "react";
 import MarkdownIt from "markdown-it";
 import { toast } from "sonner";
 import { applyPatch, type Operation } from "fast-json-patch";
 import { ChatMessages } from "./ChatMessages";
 import { ChatInput } from "./ChatInput";
+import { Button } from "@/components/ui/button";
 import {
   EventType,
   type AGUIEvent,
   type ProposalAgentState,
   type VerificationMetadata,
 } from "@/types/agui-events";
+import {
+  reduceAguiEventsToUiEvents,
+  mapRoleToDisplayRoleMeta,
+  type AgentUIEvent,
+  type MessageUIEvent,
+  type MessageProof,
+  type ToolCallStatus,
+} from "@/types/agent-ui";
 import type { RemoteProof } from "@/components/verification/VerificationProof";
-import type { PartialExpectations } from "@/utils/attestation-expectations";
 import { AGENT_MODEL, buildProposalAgentRequest } from "@/utils/agent-tools";
+import { normalizeSignaturePayload } from "@/utils/verification";
+import { extractHashesFromSignedText } from "@/utils/request-hash";
 
 type AgentRole = "user" | "assistant" | "system";
-type ToolCallStatus = "pending" | "running" | "completed" | "failed";
-type StatusLevel = "info" | "success" | "warning" | "error";
-
-interface BaseAgentEvent {
-  id: string;
-  kind: "message" | "tool_call" | "tool_result" | "status" | "sub_agent";
-  timestamp: Date;
-}
-
-interface MessageProof extends PartialExpectations {
-  requestHash?: string;
-  responseHash?: string;
-  verificationId?: string;
-  nonce?: string;
-}
-
-interface MessageEvent extends BaseAgentEvent {
-  kind: "message";
-  role: AgentRole;
-  content: string;
-  messageId?: string;
-  verification?: VerificationMetadata;
-  proof?: MessageProof;
-  remoteProof?: RemoteProof | null;
-}
-
-interface ToolCallEvent extends BaseAgentEvent {
-  kind: "tool_call";
-  toolName: string;
-  input?: unknown;
-  status: ToolCallStatus;
-}
-
-interface ToolResultEvent extends BaseAgentEvent {
-  kind: "tool_result";
-  toolName: string;
-  output?: unknown;
-  status: ToolCallStatus;
-}
-
-interface StatusEvent extends BaseAgentEvent {
-  kind: "status";
-  label: string;
-  detail?: string;
-  level: StatusLevel;
-}
-
-type AgentEvent = MessageEvent | ToolCallEvent | ToolResultEvent | StatusEvent;
 
 interface ChatProps {
   model?: string;
@@ -82,20 +44,169 @@ const SESSION_STORAGE_KEY = "agent_chat_session_v1";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const textEncoder =
-  typeof TextEncoder !== "undefined" ? new TextEncoder() : null;
-
-const hashString = async (value: string) => {
-  if (typeof window === "undefined" || !window.crypto?.subtle || !textEncoder) {
-    return "";
-  }
-
-  const data = textEncoder.encode(value);
-  const digest = await window.crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+const mapMessageRoleToAgentRole = (
+  role: MessageUIEvent["role"]
+): AgentRole | null => {
+  const meta = mapRoleToDisplayRoleMeta(role);
+  return meta.role;
 };
+
+export type EventsState = {
+  byId: Record<string, AgentUIEvent>;
+  order: string[];
+};
+
+type EventsAction =
+  | { type: "set_all"; events: AgentUIEvent[] }
+  | { type: "add"; event: AgentUIEvent }
+  | { type: "remove"; id: string }
+  | {
+      type: "update";
+      id: string;
+      updater: (event: AgentUIEvent) => AgentUIEvent;
+    }
+  | { type: "mark_tools_failed" }
+  | {
+      type: "batch_apply";
+      aguiEvents: AGUIEvent[];
+      turnNumber: number;
+    };
+
+export const eventsReducer = (
+  state: EventsState,
+  action: EventsAction
+): EventsState => {
+  switch (action.type) {
+    case "set_all": {
+      const byId: Record<string, AgentUIEvent> = {};
+      const order = action.events.map((event) => {
+        byId[event.id] = event;
+        return event.id;
+      });
+      return { byId, order };
+    }
+    case "add": {
+      if (state.byId[action.event.id]) {
+        return state;
+      }
+      return {
+        byId: { ...state.byId, [action.event.id]: action.event },
+        order: [...state.order, action.event.id],
+      };
+    }
+    case "remove": {
+      if (!state.byId[action.id]) return state;
+      const nextById = { ...state.byId };
+      delete nextById[action.id];
+      return {
+        byId: nextById,
+        order: state.order.filter((eventId) => eventId !== action.id),
+      };
+    }
+    case "update": {
+      const existing = state.byId[action.id];
+      if (!existing) return state;
+      const updated = action.updater(existing);
+      if (updated === existing) return state;
+      return {
+        byId: { ...state.byId, [action.id]: updated },
+        order: state.order,
+      };
+    }
+    case "mark_tools_failed": {
+      const nextById: Record<string, AgentUIEvent> = { ...state.byId };
+      let changed = false;
+      state.order.forEach((id) => {
+        const event = nextById[id];
+        if (
+          event?.kind === "tool_call" &&
+          (event.status === "pending" || event.status === "running")
+        ) {
+          nextById[id] = {
+            ...event,
+            status: "failed",
+          };
+          changed = true;
+        }
+      });
+      if (!changed) return state;
+      return { byId: nextById, order: state.order };
+    }
+    case "batch_apply": {
+      if (action.aguiEvents.length === 0) return state;
+      const currentEvents = state.order.map((id) => state.byId[id]);
+      const updatedEvents = action.aguiEvents.reduce(
+        (acc, incoming) =>
+          reduceAguiEventsToUiEvents(acc, incoming, {
+            turnNumber: action.turnNumber,
+          }),
+        currentEvents
+      );
+
+      let changed = false;
+      const nextById = { ...state.byId };
+      let nextOrder = state.order;
+
+      updatedEvents.forEach((event, index) => {
+        const existing = state.byId[event.id];
+        if (!existing) {
+          nextOrder = [...nextOrder, event.id];
+          changed = true;
+        }
+        if (!existing || existing !== event) {
+          nextById[event.id] = event;
+          changed = true;
+        }
+      });
+
+      return changed ? { byId: nextById, order: nextOrder } : state;
+    }
+    default:
+      return state;
+  }
+};
+
+const selectEventsArray = (state: EventsState) =>
+  state.order.map((id) => state.byId[id]).filter(Boolean) as AgentUIEvent[];
+
+export const selectConversationHistory = (
+  state: EventsState
+): Array<{ role: AgentRole; content: string }> =>
+  state.order
+    .map((id) => state.byId[id])
+    .filter((event): event is MessageUIEvent => event?.kind === "message")
+    .filter((event) => event.status === "completed")
+    .map((event) => {
+      const mappedRole = mapMessageRoleToAgentRole(event.role);
+      if (!mappedRole) return null;
+      return { role: mappedRole, content: event.content };
+    })
+    .filter(
+      (entry): entry is { role: AgentRole; content: string } => entry !== null
+    );
+
+const deriveEventsAndHistory = (
+  state: EventsState,
+  extraEvents: AgentUIEvent[] = []
+) => {
+  const mergedState: EventsState = {
+    byId: { ...state.byId },
+    order: [...state.order],
+  };
+
+  extraEvents.forEach((event) => {
+    mergedState.byId[event.id] = event;
+    if (!mergedState.order.includes(event.id)) {
+      mergedState.order.push(event.id);
+    }
+  });
+
+  return {
+    events: selectEventsArray(mergedState),
+    history: selectConversationHistory(mergedState),
+  };
+};
+
 
 export const Chat = ({
   model = AGENT_MODEL,
@@ -106,17 +217,21 @@ export const Chat = ({
   threadId,
   runId,
 }: ChatProps) => {
-  const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [eventsState, dispatchEvents] = useReducer(eventsReducer, {
+    byId: {},
+    order: [],
+  });
+  const events = selectEventsArray(eventsState);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [chatError, setChatError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [inputHeight, setInputHeight] = useState(220);
+  const [currentTurn, setCurrentTurn] = useState(0);
 
-  const conversationHistoryRef = useRef<
-    Array<{ role: AgentRole; content: string }>
-  >([]);
   const agentStateRef = useRef<Partial<ProposalAgentState> | undefined>(state);
+  const lastUserMessageRef = useRef<string>("");
   const hasHydratedRef = useRef(false);
   const streamingAssistantIdRef = useRef<string | null>(null);
 
@@ -136,19 +251,23 @@ export const Chat = ({
       const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
       if (!raw) return;
       const parsed = JSON.parse(raw) as {
-        events?: AgentEvent[];
-        history?: Array<{ role: AgentRole; content: string }>;
+        events?: AgentUIEvent[];
       };
-      if (Array.isArray(parsed?.history)) {
-        conversationHistoryRef.current = parsed.history;
-      }
       if (Array.isArray(parsed?.events)) {
-        setEvents(
-          parsed.events.map((event) => ({
-            ...event,
-            timestamp: new Date(event.timestamp),
-          }))
-        );
+        const hydratedEvents = parsed.events.map((event) => ({
+          ...event,
+          timestamp: new Date(event.timestamp),
+          turnNumber: (event as AgentUIEvent).turnNumber ?? 0,
+        }));
+        dispatchEvents({ type: "set_all", events: hydratedEvents });
+        const lastUserEvent = parsed.events
+          .filter(
+            (event: any) => event.kind === "message" && event.role === "user"
+          )
+          .pop();
+        if (lastUserEvent?.turnNumber) {
+          setCurrentTurn(lastUserEvent.turnNumber);
+        }
       }
       hasHydratedRef.current = true;
     } catch (hydrationError) {
@@ -163,7 +282,6 @@ export const Chat = ({
         SESSION_STORAGE_KEY,
         JSON.stringify({
           events,
-          history: conversationHistoryRef.current,
         })
       );
     } catch (persistError) {
@@ -179,33 +297,8 @@ export const Chat = ({
     agentStateRef.current = state;
   }, [state]);
 
-  const addEvent = (event: AgentEvent) => {
-    setEvents((prev) => [...prev, event]);
-  };
-
-  const upsertEvent = (incoming: AgentEvent) => {
-    setEvents((prev) => {
-      const index = prev.findIndex((event) => event.id === incoming.id);
-      if (index === -1) {
-        return [...prev, incoming];
-      }
-      const next = [...prev];
-      const existing = next[index];
-      const merged = { ...existing, ...incoming } as AgentEvent;
-
-      if ("proof" in existing || "proof" in (incoming as any)) {
-        (merged as any).proof =
-          (incoming as any).proof ?? (existing as any).proof;
-      }
-
-      if ("remoteProof" in existing || "remoteProof" in (incoming as any)) {
-        (merged as any).remoteProof =
-          (incoming as any).remoteProof ?? (existing as any).remoteProof;
-      }
-
-      next[index] = merged;
-      return next;
-    });
+  const addEvent = (event: AgentUIEvent) => {
+    dispatchEvents({ type: "add", event });
   };
 
   interface UpdateMessageData {
@@ -217,10 +310,12 @@ export const Chat = ({
   }
 
   const updateMessageEvent = (id: string, data: UpdateMessageData) => {
-    setEvents((prev) =>
-      prev.map((event) => {
-        if (event.id !== id || event.kind !== "message") return event;
-        const next: MessageEvent = { ...event };
+    dispatchEvents({
+      type: "update",
+      id,
+      updater: (event) => {
+        if (event.kind !== "message") return event;
+        const next: MessageUIEvent = { ...event };
         if (data.content !== undefined) next.content = data.content;
         if (data.messageId !== undefined) next.messageId = data.messageId;
         if (data.verification) {
@@ -242,12 +337,16 @@ export const Chat = ({
           next.remoteProof = data.remoteProof;
         }
         return next;
-      })
-    );
+      },
+    });
   };
 
   const removeEventById = (id: string) => {
-    setEvents((prev) => prev.filter((event) => event.id !== id));
+    dispatchEvents({ type: "remove", id });
+  };
+
+  const failActiveTools = () => {
+    dispatchEvents({ type: "mark_tools_failed" });
   };
 
   const fetchProofForMessage = async (
@@ -255,17 +354,19 @@ export const Chat = ({
     eventId: string,
     proof: MessageProof
   ) => {
+    const messageIdForStatus = proof.messageId ?? verificationId;
     updateMessageEvent(eventId, {
       verification: {
         source: "near-ai-cloud",
         status: "pending",
-        messageId: verificationId,
+        messageId: messageIdForStatus,
       },
     });
 
     try {
       console.log("[verification] Fetching proof:", {
         verificationId,
+        messageId: messageIdForStatus,
         requestHash: proof.requestHash,
         responseHash: proof.responseHash,
         nonce: proof.nonce,
@@ -276,6 +377,7 @@ export const Chat = ({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           verificationId,
+          messageId: messageIdForStatus,
           model,
           requestHash: proof.requestHash,
           responseHash: proof.responseHash,
@@ -302,12 +404,34 @@ export const Chat = ({
         nonceCheck: data.nonceCheck,
       });
 
+      const normalizedSignature = normalizeSignaturePayload(data.signature);
+      const fallbackHashes = extractHashesFromSignedText(
+        normalizedSignature?.text
+      );
+      const attestedRequestHash =
+        (typeof data.requestHash === "string" && data.requestHash) ||
+        fallbackHashes?.requestHash;
+      const attestedResponseHash =
+        (typeof data.responseHash === "string" && data.responseHash) ||
+        fallbackHashes?.responseHash;
+
       updateMessageEvent(eventId, {
         verification: {
           source: "near-ai-cloud",
           status: "verified",
-          messageId: verificationId,
+          messageId: messageIdForStatus,
         },
+        proof:
+          attestedRequestHash || attestedResponseHash
+            ? {
+                ...(attestedRequestHash
+                  ? { requestHash: attestedRequestHash }
+                  : {}),
+                ...(attestedResponseHash
+                  ? { responseHash: attestedResponseHash }
+                  : {}),
+              }
+            : undefined,
         remoteProof: data,
       });
     } catch (error) {
@@ -316,52 +440,65 @@ export const Chat = ({
         verification: {
           source: "near-ai-cloud",
           status: "failed",
-          messageId: verificationId,
+          messageId: messageIdForStatus,
         },
       });
     }
   };
 
   const handleSend = async (message: string) => {
-    addEvent({
+    const nextTurn = currentTurn + 1;
+    setCurrentTurn(nextTurn);
+    lastUserMessageRef.current = message;
+
+    const timestamp = new Date();
+    const userEvent: MessageUIEvent = {
       kind: "message",
       id: generateEventId(),
       role: "user",
       content: message,
-      timestamp: new Date(),
-    });
+      status: "completed",
+      timestamp,
+      turnNumber: nextTurn,
+    };
 
-    conversationHistoryRef.current.push({
-      role: "user",
-      content: message,
-    });
+    const { history: conversationHistorySnapshot } = deriveEventsAndHistory(
+      eventsState,
+      [userEvent]
+    );
+    dispatchEvents({ type: "add", event: userEvent });
 
     setIsLoading(true);
     setError(null);
 
     try {
-      await sendStreamingMessage();
+      setChatError(null);
+      await sendStreamingMessage(nextTurn, conversationHistorySnapshot);
     } catch (sendError) {
       const messageText =
         sendError instanceof Error
           ? sendError.message
           : "Failed to get response";
       setError(messageText);
+      setChatError(messageText);
+      failActiveTools();
+      setChatError(messageText);
       toast.error("Agent error", { description: messageText });
     } finally {
       setIsLoading(false);
     }
   };
 
-  const sendStreamingMessage = async () => {
+  const sendStreamingMessage = async (
+    turnNumber: number,
+    conversationHistory: Array<{ role: AgentRole; content: string }>
+  ) => {
     const assistantEventId = generateEventId();
     let fullContent = "";
-    const proofData: MessageProof = {};
-    let remoteMessageId: string | undefined;
-    let proofRequested = false;
-    const messagesSnapshot = [...conversationHistoryRef.current];
-    const toolCallBuffers = new Map<string, string>();
-    const toolCallMeta = new Map<string, { name?: string }>();
+    const initialProofData: MessageProof = { stage: "initial_reasoning" };
+    const synthesisProofData: MessageProof = { stage: "final_synthesis" };
+    let initialProofRequested = false;
+    let synthesisProofRequested = false;
 
     streamingAssistantIdRef.current = assistantEventId;
 
@@ -370,7 +507,9 @@ export const Chat = ({
       id: assistantEventId,
       role: "assistant",
       content: "",
+      status: "in_progress",
       timestamp: new Date(),
+      turnNumber,
     });
 
     try {
@@ -386,18 +525,17 @@ export const Chat = ({
       const { nonce } = await sessionResp.json();
 
       const { requestBody } = buildProposalAgentRequest({
-        messages: messagesSnapshot,
+        messages: conversationHistory,
         state: agentStateRef.current,
         model,
       });
       const requestBodyString = JSON.stringify(requestBody);
 
-      proofData.requestHash = await hashString(requestBodyString);
-      proofData.nonce = nonce;
-      proofData.verificationId = verificationId;
+      initialProofData.nonce = nonce;
+      initialProofData.verificationId = verificationId;
 
       updateMessageEvent(assistantEventId, {
-        proof: { ...proofData },
+        proof: { ...initialProofData },
         verification: {
           source: "near-ai-cloud",
           status: "pending",
@@ -406,7 +544,7 @@ export const Chat = ({
       });
 
       const bodyPayload = JSON.stringify({
-        messages: messagesSnapshot,
+        messages: conversationHistory,
         state: agentStateRef.current,
         threadId,
         runId,
@@ -437,182 +575,100 @@ export const Chat = ({
       const decoder = new TextDecoder();
       let buffer = "";
 
-      const maybeRequestProof = async () => {
-        if (
-          proofRequested ||
-          !remoteMessageId ||
-          !proofData.requestHash ||
-          !proofData.responseHash
-        ) {
-          return;
-        }
-        proofRequested = true;
-        await delay(2000);
-        fetchProofForMessage(remoteMessageId, assistantEventId, {
-          ...proofData,
-        });
-      };
-
       const handleCustomVerification = (value: any) => {
         if (!value || typeof value !== "object") return;
-        if (typeof value.messageId === "string") {
-          remoteMessageId = value.messageId;
+
+        const stage = value.stage as
+          | "initial_reasoning"
+          | "final_synthesis"
+          | undefined;
+        const isInitial = stage === "initial_reasoning";
+        const isSynthesis = stage === "final_synthesis";
+
+        const targetProof = isInitial
+          ? initialProofData
+          : isSynthesis
+          ? synthesisProofData
+          : null;
+
+        if (!targetProof) {
+          console.warn("[verification] Unknown stage:", stage);
+          return;
+        }
+
+        if (typeof value.verificationId === "string") {
+          targetProof.verificationId = value.verificationId;
         }
         if (typeof value.requestHash === "string") {
-          proofData.requestHash = value.requestHash;
+          targetProof.requestHash = value.requestHash;
         }
         if (typeof value.responseHash === "string") {
-          proofData.responseHash = value.responseHash;
+          targetProof.responseHash = value.responseHash;
         }
-        if (typeof value.nonce === "string" && !proofData.nonce) {
-          proofData.nonce = value.nonce;
+        if (typeof value.nonce === "string") {
+          targetProof.nonce = value.nonce;
         }
-        updateMessageEvent(assistantEventId, { proof: { ...proofData } });
-        maybeRequestProof();
+        if (typeof value.messageId === "string") {
+          targetProof.messageId = value.messageId;
+        }
+
+        updateMessageEvent(assistantEventId, {
+          proof: {
+            ...(isSynthesis ? synthesisProofData : initialProofData),
+          },
+        });
+
+        const ready = Boolean(targetProof.verificationId);
+
+        if (isInitial && ready && !initialProofRequested) {
+          initialProofRequested = true;
+          delay(2000).then(() =>
+            fetchProofForMessage(
+              targetProof.verificationId!,
+              assistantEventId,
+              { ...targetProof }
+            )
+          );
+        }
+
+        if (isSynthesis && ready && !synthesisProofRequested) {
+          synthesisProofRequested = true;
+          delay(2000).then(() =>
+            fetchProofForMessage(
+              targetProof.verificationId!,
+              assistantEventId,
+              { ...targetProof }
+            )
+          );
+        }
       };
 
-      const handleToolCall = (
-        toolCallId: string,
-        toolName?: string,
-        delta?: string
-      ) => {
-        const existing = toolCallBuffers.get(toolCallId) || "";
-        const nextPayload = delta ? existing + delta : existing;
-        toolCallBuffers.set(toolCallId, nextPayload);
-        const resolvedName =
-          toolName ?? toolCallMeta.get(toolCallId)?.name ?? "Tool call";
-        upsertEvent({
-          kind: "tool_call",
-          id: toolCallId,
-          toolName: resolvedName,
-          input: nextPayload,
-          status: "running",
-          timestamp: new Date(),
-        });
-      };
+      const pendingAguiEvents: AGUIEvent[] = [];
 
-      const completeToolCall = (toolCallId: string) => {
-        upsertEvent({
-          kind: "tool_call",
-          id: toolCallId,
-          toolName: toolCallMeta.get(toolCallId)?.name || "Tool call",
-          input: toolCallBuffers.get(toolCallId),
-          status: "completed",
-          timestamp: new Date(),
+      const flushPendingEvents = () => {
+        if (pendingAguiEvents.length === 0) return;
+        dispatchEvents({
+          type: "batch_apply",
+          aguiEvents: [...pendingAguiEvents],
+          turnNumber,
         });
+        pendingAguiEvents.length = 0;
       };
 
       const handleAgentEvent = (event: AGUIEvent) => {
-        const eventTimestamp = event.timestamp
-          ? new Date(event.timestamp)
-          : new Date();
+        pendingAguiEvents.push(event);
         switch (event.type) {
-          case EventType.RUN_STARTED:
-            addEvent({
-              kind: "status",
-              id: generateEventId(),
-              label: "Agent run started",
-              level: "info",
-              timestamp: eventTimestamp,
-            });
-            break;
-          case EventType.RUN_FINISHED:
-            addEvent({
-              kind: "status",
-              id: generateEventId(),
-              label: "Agent run finished",
-              level: "success",
-              timestamp: eventTimestamp,
-            });
-            break;
           case EventType.RUN_ERROR:
-            addEvent({
-              kind: "status",
-              id: generateEventId(),
-              label: event.message || "Agent run error",
-              detail: event.code,
-              level: "error",
-              timestamp: eventTimestamp,
-            });
-            setError(event.message || "Agent run failed");
+      const messageText = event.message || "Agent run failed";
+      setError(messageText);
+      setChatError(messageText);
+      failActiveTools();
             break;
-          case EventType.STEP_STARTED:
-            addEvent({
-              kind: "status",
-              id: generateEventId(),
-              label: `Step started: ${event.stepName}`,
-              level: "info",
-              timestamp: eventTimestamp,
-            });
-            break;
-          case EventType.STEP_FINISHED:
-            addEvent({
-              kind: "status",
-              id: generateEventId(),
-              label: `Step finished: ${event.stepName}`,
-              level: "success",
-              timestamp: eventTimestamp,
-            });
-            break;
-          case EventType.TEXT_MESSAGE_CONTENT: {
-            if (event.messageId) {
-              remoteMessageId = event.messageId;
-              console.log(
-                "[Chat] Captured messageId from TEXT_MESSAGE_CONTENT:",
-                remoteMessageId
-              );
-            }
+          case EventType.TEXT_MESSAGE_CONTENT:
             fullContent += event.delta ?? "";
-            updateMessageEvent(assistantEventId, {
-              content: fullContent,
-              messageId: remoteMessageId ?? event.messageId,
-            });
             break;
-          }
           case EventType.TEXT_MESSAGE_END:
-            if (event.messageId) {
-              remoteMessageId = event.messageId;
-            }
-            updateMessageEvent(assistantEventId, {
-              messageId: remoteMessageId ?? event.messageId,
-            });
-            void maybeRequestProof();
             break;
-          case EventType.TOOL_CALL_START:
-            toolCallMeta.set(event.toolCallId, { name: event.toolCallName });
-            handleToolCall(event.toolCallId, event.toolCallName, undefined);
-            break;
-          case EventType.TOOL_CALL_ARGS:
-            handleToolCall(
-              event.toolCallId,
-              toolCallMeta.get(event.toolCallId)?.name,
-              event.delta
-            );
-            break;
-          case EventType.TOOL_CALL_END:
-            completeToolCall(event.toolCallId);
-            break;
-          case EventType.TOOL_CALL_RESULT: {
-            const resultEventId = event.toolCallId
-              ? `${event.toolCallId}-result`
-              : generateEventId();
-            toolCallMeta.set(event.toolCallId, {
-              name:
-                event.toolCallName ?? toolCallMeta.get(event.toolCallId)?.name,
-            });
-            addEvent({
-              kind: "tool_result",
-              id: resultEventId,
-              toolName:
-                event.toolCallName ||
-                toolCallMeta.get(event.toolCallId || "")?.name ||
-                "Tool result",
-              output: event.content,
-              status: "completed",
-              timestamp: eventTimestamp,
-            });
-            break;
-          }
           case EventType.STATE_DELTA:
             if (Array.isArray(event.delta)) {
               try {
@@ -658,6 +714,7 @@ export const Chat = ({
             console.error("Failed to parse agent event", parseError, payload);
           }
         }
+        flushPendingEvents();
       };
 
       while (true) {
@@ -671,23 +728,18 @@ export const Chat = ({
 
       buffer += decoder.decode();
       processBuffer();
+      flushPendingEvents();
 
-      if (fullContent) {
-        conversationHistoryRef.current.push({
-          role: "assistant",
-          content: fullContent,
-        });
-      } else {
+      if (!fullContent) {
         removeEventById(assistantEventId);
         streamingAssistantIdRef.current = null;
         return;
       }
 
       await delay(100);
-
-      await maybeRequestProof();
     } catch (error) {
       removeEventById(assistantEventId);
+      failActiveTools();
       throw error;
     } finally {
       streamingAssistantIdRef.current = null;
@@ -696,9 +748,9 @@ export const Chat = ({
 
   const clearChat = () => {
     if (window.confirm("Clear chat history?")) {
-      setEvents([]);
-      conversationHistoryRef.current = [];
+      dispatchEvents({ type: "set_all", events: [] });
       setError(null);
+      setCurrentTurn(0);
       streamingAssistantIdRef.current = null;
       if (typeof window !== "undefined") {
         sessionStorage.removeItem(SESSION_STORAGE_KEY);
@@ -725,6 +777,24 @@ export const Chat = ({
   return (
     <div className={`flex h-full min-h-0 flex-col ${className}`}>
       <div className="flex-1 min-h-0">
+        {chatError && (
+          <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold">Run interrupted</p>
+              <p className="text-xs text-red-700">{chatError}</p>
+            </div>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() =>
+                lastUserMessageRef.current &&
+                handleSend(lastUserMessageRef.current)
+              }
+            >
+              Retry
+            </Button>
+          </div>
+        )}
         <ChatMessages
           events={events}
           isLoading={isLoading}

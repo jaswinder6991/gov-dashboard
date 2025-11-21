@@ -159,7 +159,7 @@ You respond:
 \`\`\`json
 {
   "type": "proposal_list",
-  "description": "Here are 9 recent proposals from the governance forum, sorted by latest activity.",
+  "description": "Here are 9 recent proposals, sorted by latest activity.",
   "topics": [
     {
       "id": 41773,

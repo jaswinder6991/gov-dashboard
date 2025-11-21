@@ -11,7 +11,6 @@ import {
 } from "@/utils/attestation-expectations";
 import type { RemoteProof } from "@/components/verification/VerificationProof";
 import type { VerificationMetadata } from "@/types/agui-events";
-import { calculateResponseHash } from "@/utils/request-hash";
 
 // Import all types (keeping your existing type definitions)
 type AgentRole = "user" | "assistant" | "system";
@@ -139,20 +138,6 @@ const toSubAgentPhase = (phase?: string): SubAgentPhase => {
 };
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const textEncoder =
-  typeof TextEncoder !== "undefined" ? new TextEncoder() : null;
-
-const hashString = async (value: string) => {
-  if (typeof window === "undefined" || !window.crypto?.subtle || !textEncoder) {
-    return "";
-  }
-  const data = textEncoder.encode(value);
-  const digest = await window.crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-};
 
 const extractText = (value: unknown): string => {
   if (!value) return "";
@@ -613,7 +598,6 @@ export const Chatbot = ({
     };
 
     const nearAiRequestString = JSON.stringify(nearAiRequestBody);
-    proofData.requestHash = await hashString(nearAiRequestString);
     proofData.nonce = nonce;
     proofData.verificationId = verificationId;
 
@@ -626,13 +610,12 @@ export const Chatbot = ({
 
     const requestPayload = JSON.stringify(proxyRequestBody);
 
-    console.log("[verification] Sending request:", {
-      verificationId,
-      nonce,
-      requestHash: proofData.requestHash,
-      requestLength: nearAiRequestString.length,
-      proxyRequestLength: requestPayload.length,
-    });
+      console.log("[verification] Sending request:", {
+        verificationId,
+        nonce,
+        requestLength: nearAiRequestString.length,
+        proxyRequestLength: requestPayload.length,
+      });
 
     const streamOnce = async (skipChars: number) => {
       let rawResponseText = "";
@@ -757,24 +740,17 @@ export const Chatbot = ({
       buffer += finalChunk;
       responseRaw = rawResponseText;
 
-      try {
-        const responseHash = calculateResponseHash(rawResponseText);
-        proofData.responseHash = responseHash;
-        console.log("[verification] Stream complete:", {
-          verificationId,
-          rawResponseLength: rawResponseText.length,
-          rawResponsePreview: {
-            first100: rawResponseText.substring(0, 100),
-            last100: rawResponseText.substring(
-              Math.max(0, rawResponseText.length - 100)
-            ),
-          },
-          responseHash,
-          endsWithNewlines: rawResponseText.endsWith("\n\n"),
-        });
-      } catch {
-        // ignore logging errors
-      }
+      console.log("[verification] Stream complete:", {
+        verificationId,
+        rawResponseLength: rawResponseText.length,
+        rawResponsePreview: {
+          first100: rawResponseText.substring(0, 100),
+          last100: rawResponseText.substring(
+            Math.max(0, rawResponseText.length - 100)
+          ),
+        },
+        endsWithNewlines: rawResponseText.endsWith("\n\n"),
+      });
     };
 
     try {
@@ -811,25 +787,6 @@ export const Chatbot = ({
         // Drop empty assistant messages to avoid blank bubbles/pills
         removeEventById(assistantEventId);
         return;
-      }
-
-      if (responseRaw) {
-        try {
-          const responseHash = calculateResponseHash(responseRaw);
-          if (responseHash) {
-            proofData.responseHash = responseHash;
-          }
-        } catch {
-          // Fallback to web crypto hashing in the browser
-          const responseHash = await hashString(responseRaw);
-          if (responseHash) {
-            proofData.responseHash = responseHash;
-          }
-        }
-      }
-
-      if (proofData.requestHash || proofData.responseHash) {
-        updateMessageEvent(assistantEventId, { proof: proofData });
       }
 
       if (messageId) {

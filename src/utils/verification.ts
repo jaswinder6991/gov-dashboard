@@ -26,6 +26,50 @@ export const shortenFingerprint = (
   return `${value.slice(0, visible)}…${value.slice(-visible)}`;
 };
 
+export type NormalizedSignaturePayload = {
+  signature?: string;
+  text?: string;
+  signing_address?: string;
+  signing_algo?: string;
+};
+
+export const normalizeSignaturePayload = (
+  sig: unknown
+): NormalizedSignaturePayload | null => {
+  if (!sig) return null;
+
+  if (typeof sig === "string") {
+    return { signature: sig };
+  }
+
+  if (typeof sig !== "object") {
+    return null;
+  }
+
+  const candidateList = [
+    sig,
+    (sig as any)?.data,
+    (sig as any)?.result,
+    (sig as any)?.signature ? sig : null,
+  ].filter(Boolean);
+
+  for (const candidate of candidateList) {
+    if (
+      candidate &&
+      (candidate.signature || candidate.text || candidate.signing_address)
+    ) {
+      return {
+        signature: (candidate as any).signature,
+        text: (candidate as any).text,
+        signing_address: (candidate as any).signing_address,
+        signing_algo: (candidate as any).signing_algo,
+      };
+    }
+  }
+
+  return null;
+};
+
 export const extractVerificationMetadata = (
   payload: Record<string, any>,
   envelope?: Record<string, any>
