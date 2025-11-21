@@ -11,6 +11,7 @@ import {
 } from "@/utils/attestation-expectations";
 import type { RemoteProof } from "@/components/verification/VerificationProof";
 import type { VerificationMetadata } from "@/types/agui-events";
+import type { AgentUIEvent } from "@/types/agent-ui";
 
 // Import all types (keeping your existing type definitions)
 type AgentRole = "user" | "assistant" | "system";
@@ -22,12 +23,14 @@ interface BaseAgentEvent {
   id: string;
   kind: "message" | "tool_call" | "tool_result" | "status" | "sub_agent";
   timestamp: Date;
+  turnNumber?: number;
 }
 
 interface MessageEvent extends BaseAgentEvent {
   kind: "message";
   role: AgentRole;
   content: string;
+  status?: "in_progress" | "completed";
   messageId?: string;
   verification?: VerificationMetadata;
   proof?: MessageProof;
@@ -47,6 +50,7 @@ interface ToolResultEvent extends BaseAgentEvent {
   toolName: string;
   output?: unknown;
   status: ToolCallStatus;
+  toolCallId?: string;
   messageId?: string;
   verification?: VerificationMetadata;
 }
@@ -159,6 +163,93 @@ const extractText = (value: unknown): string => {
   return "";
 };
 
+const serializeToolInput = (input?: unknown): string | undefined => {
+  if (input === undefined || input === null) return undefined;
+  if (typeof input === "string") return input;
+  try {
+    return JSON.stringify(input);
+  } catch {
+    return String(input);
+  }
+};
+
+const assertNever = (value: never): never => {
+  throw new Error(`Unhandled agent event: ${JSON.stringify(value)}`);
+};
+
+const convertAgentEventToUIEvent = (event: AgentEvent): AgentUIEvent => {
+  const turnNumber = event.turnNumber ?? 0;
+  const timestamp =
+    event.timestamp instanceof Date ? event.timestamp : new Date(event.timestamp);
+
+  switch (event.kind) {
+    case "message": {
+      const status =
+        event.status ??
+        (event.role === "assistant" && !event.content
+          ? "in_progress"
+          : "completed");
+
+      return {
+        id: event.id,
+        kind: "message",
+        role: event.role,
+        content: event.content,
+        status,
+        messageId: event.messageId,
+        verification: event.verification,
+        proof: event.proof,
+        remoteProof: event.remoteProof ?? null,
+        turnNumber,
+        timestamp,
+      };
+    }
+    case "tool_call":
+      return {
+        id: event.id,
+        kind: "tool_call",
+        toolCallId: event.id,
+        toolName: event.toolName,
+        input: serializeToolInput(event.input),
+        status: event.status ?? "pending",
+        turnNumber,
+        timestamp,
+      };
+    case "tool_result":
+      return {
+        id: event.id,
+        kind: "tool_result",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        output: event.output,
+        status: event.status ?? "completed",
+        turnNumber,
+        timestamp,
+      };
+    case "status":
+      return {
+        id: event.id,
+        kind: "status",
+        label: event.label,
+        detail: event.detail,
+        level: event.level ?? "info",
+        turnNumber,
+        timestamp,
+      };
+    case "sub_agent":
+      return {
+        id: event.id,
+        kind: "sub_agent",
+        agentName: event.agentName,
+        phase: event.phase,
+        detail: event.detail,
+        turnNumber,
+        timestamp,
+      };
+  }
+  return assertNever(event);
+};
+
 export const Chatbot = ({
   model = "openai/gpt-oss-120b",
   className = "",
@@ -177,6 +268,8 @@ export const Chatbot = ({
   const conversationHistoryRef = useRef<
     Array<{ role: string; content: string }>
   >([]);
+  const turnCounterRef = useRef(0);
+  const activeTurnRef = useRef(0);
 
   const markdown = useMemo(
     () =>
@@ -213,12 +306,23 @@ export const Chatbot = ({
       }
 
       if (Array.isArray(parsed?.events)) {
-        setEvents(
-          parsed.events.map((event) => ({
-            ...event,
-            timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
-          }))
+        const hydratedEvents = parsed.events.map((event) => ({
+          ...event,
+          timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
+        }));
+        setEvents(hydratedEvents);
+        const lastTurn = hydratedEvents.reduce(
+          (max, event) => Math.max(max, event.turnNumber ?? 0),
+          0
         );
+        turnCounterRef.current = Math.max(
+          lastTurn,
+          conversationHistoryRef.current.length
+        );
+        activeTurnRef.current = turnCounterRef.current;
+      } else {
+        turnCounterRef.current = conversationHistoryRef.current.length;
+        activeTurnRef.current = turnCounterRef.current;
       }
 
       hasHydratedRef.current = true;
@@ -254,7 +358,36 @@ export const Chatbot = ({
         return [...prev, incoming];
       }
       const updated = [...prev];
-      updated[index] = { ...updated[index], ...incoming };
+      const existing = updated[index];
+
+      if (!existing || existing.kind !== incoming.kind) {
+        updated[index] = incoming;
+        return updated;
+      }
+
+      if (incoming.kind === "message" && existing.kind === "message") {
+        updated[index] = { ...existing, ...incoming };
+      } else if (
+        incoming.kind === "tool_call" &&
+        existing.kind === "tool_call"
+      ) {
+        updated[index] = { ...existing, ...incoming };
+      } else if (
+        incoming.kind === "tool_result" &&
+        existing.kind === "tool_result"
+      ) {
+        updated[index] = { ...existing, ...incoming };
+      } else if (incoming.kind === "status" && existing.kind === "status") {
+        updated[index] = { ...existing, ...incoming };
+      } else if (
+        incoming.kind === "sub_agent" &&
+        existing.kind === "sub_agent"
+      ) {
+        updated[index] = { ...existing, ...incoming };
+      } else {
+        updated[index] = incoming;
+      }
+
       return updated;
     });
   };
@@ -265,6 +398,7 @@ export const Chatbot = ({
     verification?: VerificationMetadata;
     proof?: MessageProof;
     remoteProof?: RemoteProof | null;
+    status?: "in_progress" | "completed";
   }
 
   const updateMessageEvent = (id: string, data: UpdateMessageData) => {
@@ -305,6 +439,17 @@ export const Chatbot = ({
           next.remoteProof = data.remoteProof;
         }
 
+        if (data.status) {
+          next.status = data.status;
+        }
+
+        if (!next.status) {
+          next.status =
+            next.role === "assistant" && !next.content
+              ? "in_progress"
+              : "completed";
+        }
+
         return next;
       })
     );
@@ -319,21 +464,48 @@ export const Chatbot = ({
     eventId: string,
     proof: MessageProof
   ) => {
-    // Ensure server-side session exists and stores hashes (nonce generated server-side)
-    try {
-      const sessionResp = await fetch("/api/verification/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          verificationId,
-          requestHash: proof.requestHash,
-          responseHash: proof.responseHash,
-        }),
-      });
-      if (!sessionResp.ok) {
-        const text = await sessionResp.text();
-        throw new Error(text || "Failed to register verification session");
+    const syncVerificationSession = async () => {
+      const callSessionEndpoint = async () => {
+        const sessionResp = await fetch("/api/verification/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            verificationId,
+            requestHash: proof.requestHash,
+            responseHash: proof.responseHash,
+          }),
+        });
+        if (!sessionResp.ok) {
+          const text = await sessionResp.text();
+          throw new Error(text || "Failed to register verification session");
+        }
+      };
+
+      try {
+        await callSessionEndpoint();
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to register verification session";
+        if (!message.toLowerCase().includes("not registered")) {
+          throw error instanceof Error ? error : new Error(message);
+        }
+
+        const registerResp = await fetch("/api/verification/register-session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ verificationId }),
+        });
+        if (!registerResp.ok) {
+          const text = await registerResp.text();
+          throw new Error(text || "Failed to register verification session");
+        }
+
+        await callSessionEndpoint();
       }
+    };
+
+    try {
+      await syncVerificationSession();
     } catch (sessionError) {
       console.error("Failed to register verification session:", sessionError);
       toast.error("Unable to register verification session", {
@@ -353,8 +525,8 @@ export const Chatbot = ({
       },
     });
 
-    try {
-      const response = await fetch("/api/verification/proof", {
+    const requestProof = async () => {
+      const resp = await fetch("/api/verification/proof", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -362,16 +534,40 @@ export const Chatbot = ({
           model,
           requestHash: proof.requestHash,
           responseHash: proof.responseHash,
-          // Server will fetch nonce/expectations via session + attestation cache
         }),
       });
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || "Failed to fetch verification proof");
+      }
+      return (await resp.json()) as RemoteProof;
+    };
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || "Failed to fetch verification proof");
+    try {
+      let remoteProof: RemoteProof | null = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          remoteProof = await requestProof();
+          break;
+        } catch (attemptError) {
+          const message =
+            attemptError instanceof Error
+              ? attemptError.message
+              : "Failed to fetch verification proof";
+          const needsSession =
+            attempt === 0 &&
+            message.toLowerCase().includes("verification session not registered");
+          if (needsSession) {
+            await syncVerificationSession();
+            continue;
+          }
+          throw attemptError;
+        }
       }
 
-      const data = (await response.json()) as RemoteProof;
+      if (!remoteProof) {
+        throw new Error("Failed to fetch verification proof");
+      }
 
       updateMessageEvent(eventId, {
         verification: {
@@ -379,12 +575,25 @@ export const Chatbot = ({
           status: "verified",
           messageId: verificationId,
         },
-        remoteProof: data,
+        remoteProof,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to fetch verification proof";
+      console.error("Automatic proof fetch failed:", error);
+
+      updateMessageEvent(eventId, {
+        verification: {
+          source: "near-ai-cloud",
+          status: "failed",
+          messageId: verificationId,
+          error: message,
+        },
       });
 
-    } catch (error) {
-      console.error("Automatic proof fetch failed:", error);
-      // Surface errors silently here; VerificationProof handles toast feedback.
+      toast.error("Unable to load verification proof", {
+        description: message,
+      });
     }
   };
 
@@ -506,6 +715,11 @@ export const Chatbot = ({
             envelope?.name ||
             envelope?.toolName ||
             "Tool result",
+          toolCallId:
+            envelope?.tool_call_id ||
+            envelope?.toolCallId ||
+            envelope?.tool_call?.id ||
+            envelope?.parent_id,
           output:
             envelope?.tool?.output ||
             envelope?.output ||
@@ -566,6 +780,8 @@ export const Chatbot = ({
     const baseBackoff = 750;
     let responseRaw = "";
     const proofData: MessageProof = {};
+    const currentTurnNumber =
+      activeTurnRef.current || turnCounterRef.current || 0;
 
     streamingAssistantIdRef.current = assistantEventId;
 
@@ -574,6 +790,8 @@ export const Chatbot = ({
       id: assistantEventId,
       role: "assistant",
       content: "",
+      status: "in_progress",
+      turnNumber: currentTurnNumber,
       timestamp: new Date(),
     });
 
@@ -648,7 +866,6 @@ export const Chatbot = ({
       const handlePayload = (payload: Record<string, any>) => {
         const normalized = normalizeAgUiEvent(payload);
         if (!normalized) return;
-
         if (normalized.kind === "message_delta") {
           if (!messageId && normalized.messageId) {
             messageId = normalized.messageId;
@@ -700,12 +917,18 @@ export const Chatbot = ({
             updateData.verification ||
             updateData.proof
           ) {
+            updateData.status = "in_progress";
             updateMessageEvent(assistantEventId, updateData);
           }
           return;
         }
 
-        upsertEvent(normalized);
+        const targetTurnNumber =
+          normalized.turnNumber ??
+          activeTurnRef.current ??
+          turnCounterRef.current ??
+          0;
+        upsertEvent({ ...normalized, turnNumber: targetTurnNumber });
       };
 
       while (true) {
@@ -771,6 +994,7 @@ export const Chatbot = ({
             label: "Reconnecting to NEAR AI Cloud",
             detail: `Attempt ${attempt + 1} of ${maxAttempts}`,
             level: "warning",
+            turnNumber: activeTurnRef.current || turnCounterRef.current || 0,
             timestamp: new Date(),
           });
 
@@ -783,6 +1007,7 @@ export const Chatbot = ({
           role: "assistant",
           content: fullContent,
         });
+        updateMessageEvent(assistantEventId, { status: "completed" });
       } else {
         // Drop empty assistant messages to avoid blank bubbles/pills
         removeEventById(assistantEventId);
@@ -801,11 +1026,17 @@ export const Chatbot = ({
   };
 
   const handleSend = async (message: string) => {
+    const nextTurnNumber = turnCounterRef.current + 1;
+    turnCounterRef.current = nextTurnNumber;
+    activeTurnRef.current = nextTurnNumber;
+
     addEvent({
       kind: "message",
       id: generateEventId(),
       role: "user",
       content: message,
+      status: "completed",
+      turnNumber: nextTurnNumber,
       timestamp: new Date(),
     });
     conversationHistoryRef.current.push({ role: "user", content: message });
@@ -848,11 +1079,16 @@ export const Chatbot = ({
       )
   );
 
+  const uiEvents = useMemo<AgentUIEvent[]>(
+    () => events.map((event) => convertAgentEventToUIEvent(event)),
+    [events]
+  );
+
   return (
     <div className={`flex h-full min-h-0 flex-col ${className}`}>
       <div className="flex-1 min-h-0">
         <ChatMessages
-          events={events}
+          events={uiEvents}
           isLoading={isLoading}
           isInitialized={isInitialized}
           showTypingIndicator={shouldShowTypingIndicator}

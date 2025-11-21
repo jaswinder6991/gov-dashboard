@@ -46,7 +46,7 @@ export const DISCOURSE_TOOLS = [
     function: {
       name: "get_latest_topics",
       description:
-        "Get the most recent proposals from the governance forum. ALWAYS use this when user asks 'how many proposals', 'what are recent proposals', 'show latest', 'what's new', or 'list proposals'. This is the primary tool for browsing proposals.",
+        "Get the most recent proposals from the governance forum. Use this whenever the user wants counts, recent activity, or “what’s new” in the proposals section. This is the primary tool for browsing proposals.",
       parameters: {
         type: "object",
         properties: {
@@ -102,8 +102,9 @@ export function buildDiscourseSystemPrompt(): string {
 You have powerful tools to explore the governance forum. Choose carefully:
 
 **CRITICAL TOOL SELECTION:**
-- "how many proposals" / "list proposals" / "what's new" → ALWAYS use get_latest_topics (NOT search_discourse)
-- "search for [keyword]" / "find posts about [topic]" → use search_discourse
+- If a new turn asks for “latest/recent/what’s new” right after a search, ignore the previous search results and call **get_latest_topics** again; never recycle the old search list.
+- Requests about what’s new, trending, most popular/active, or any count/list of proposals → prefer **get_latest_topics** (use search only if the user insists on specific keywords).
+- Requests to “search/find” proposals by keyword/author/topic → use **search_discourse**.
 - "show me topic 123" / "discussion on proposal X" → use get_discourse_topic
 - "what do people think" / "community sentiment" → use summarize_discussion
 - "what did user X say" → use summarize_reply
@@ -117,59 +118,19 @@ You have powerful tools to explore the governance forum. Choose carefully:
 
 **CRITICAL RESPONSE FORMAT:**
 
-When you call **get_latest_topics** or **search_discourse** and receive a tool result with a "topics" array, you MUST respond with this exact format:
+When you call **get_latest_topics** or **search_discourse** and receive a tool result with a "topics" array, your ENTIRE reply must be exactly the following two parts (in order):
+1. A single sentence describing what you fetched (e.g., “Here are the latest proposals on NEAR governance.”).
+2. A JSON block (type = "proposal_list") that copies the tool’s "topics" array verbatim. This block enables the UI to render cards, so do not alter the data structure.
 
+Never echo raw tool request payloads (e.g., \`{"type":"search_discourse", ...}\`) back to the user. Do not repeat or summarize individual proposals outside the JSON block. Always include the sentence + JSON even if the user repeats the same request or the results haven’t changed—never reply with “same as above”. Output nothing else.
+
+**Example response:**
+Here are the latest proposals from the governance forum.
 \`\`\`json
 {
   "type": "proposal_list",
-  "description": "Brief 1-2 sentence description",
-  "topics": [PASTE THE ENTIRE TOPICS ARRAY FROM TOOL RESULT HERE]
-}
-\`\`\`
-
-**DO NOT:**
-- Create markdown tables
-- Reformat the data
-- Summarize in text
-
-**DO:**
-- Copy the entire "topics" array from the tool result exactly as received
-- Add only a "type" field set to "proposal_list" and a "description" field
-- Wrap everything in a json code block
-
-**Example:**
-You receive tool result:
-\`\`\`json
-{
-  "topics": [
-    {
-      "id": 41773,
-      "title": "HSP-xxx: NEAR Protocol Membership in UN Blockchain Council",
-      "slug": "hsp-xxx-near-protocol-membership-in-un-blockchain-council",
-      "author": "JPALHUMAIDAN",
-      "created_at": "2025-11-11T10:34:55.124Z",
-      ...
-    }
-  ],
-  "total_count": 9
-}
-\`\`\`
-
-You respond:
-\`\`\`json
-{
-  "type": "proposal_list",
-  "description": "Here are 9 recent proposals, sorted by latest activity.",
-  "topics": [
-    {
-      "id": 41773,
-      "title": "HSP-xxx: NEAR Protocol Membership in UN Blockchain Council",
-      "slug": "hsp-xxx-near-protocol-membership-in-un-blockchain-council",
-      "author": "JPALHUMAIDAN",
-      "created_at": "2025-11-11T10:34:55.124Z",
-      ...
-    }
-  ]
+  "description": "Latest proposals sorted by activity.",
+  "topics": [/* paste the topics array from the tool here */]
 }
 \`\`\`
 

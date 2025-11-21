@@ -27,6 +27,12 @@ export interface DiscoursePost {
   avatar_template?: string | null;
   version?: number;
   topic_id?: number;
+  topic_title?: string;
+  topic_slug?: string;
+  topic_posts_count?: number;
+  topic_reply_count?: number;
+  topic_views?: number;
+  topic_bumped_at?: string;
 }
 
 export interface DiscoursePostStream {

@@ -916,8 +916,8 @@ export function VerificationProof({
   }, [
     remoteProof,
     nrasData,
-    requestHash,
-    responseHash,
+    effectiveRequestHash,
+    effectiveResponseHash,
     signaturePayload?.text,
     signaturePayload?.signature,
     signaturePayload?.signing_address,

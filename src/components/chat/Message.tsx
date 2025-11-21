@@ -3,9 +3,7 @@ import {
   VerificationProof,
   type RemoteProof,
 } from "@/components/verification/VerificationProof";
-import ProposalCard from "@/components/proposal/ProposalCard";
 import type { VerificationMetadata, MessageRole } from "@/types/agui-events";
-import type { ProposalDisplayData } from "@/types/proposals";
 import type { DisplayRole, MessageProof } from "@/types/agent-ui";
 import MarkdownIt from "markdown-it";
 import DOMPurify from "dompurify";
@@ -15,6 +13,7 @@ interface MessageProps {
   rawRole?: MessageRole;
   label?: string;
   content: string;
+  displayContent?: string;
   timestamp: Date;
   messageId?: string;
   verification?: VerificationMetadata;
@@ -31,40 +30,12 @@ const renderMarkdownContent = (
   __html: DOMPurify.sanitize(markdown.render(content || "")),
 });
 
-const extractJsonFromMarkdown = (
-  content: string
-): ProposalDisplayData | null => {
-  const parseProposalPayload = (payload: string | null | undefined) => {
-    if (!payload) return null;
-    try {
-      const parsed = JSON.parse(payload);
-      if (parsed.type === "proposal_list" && Array.isArray(parsed.topics)) {
-        return parsed as ProposalDisplayData;
-      }
-    } catch (e) {
-      console.error("Failed to parse proposal JSON:", e);
-    }
-    return null;
-  };
-
-  const codeMatch = content.match(/```json\s*\n([\s\S]*?)```/i);
-  const fromCodeBlock = parseProposalPayload(codeMatch?.[1]);
-  if (fromCodeBlock) return fromCodeBlock;
-
-  const trimmed = content.trim();
-  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-    const direct = parseProposalPayload(trimmed);
-    if (direct) return direct;
-  }
-
-  return null;
-};
-
 export const Message = ({
   role,
   rawRole,
   label: providedLabel,
   content,
+  displayContent,
   timestamp,
   messageId,
   verification,
@@ -116,9 +87,6 @@ export const Message = ({
       ? "Verify reasoning"
       : undefined;
 
-  const proposalData =
-    normalizedRole === "assistant" ? extractJsonFromMarkdown(content) : null;
-
   return (
     <div className={`flex ${alignment}`}>
       <div
@@ -139,35 +107,13 @@ export const Message = ({
             })}
           </span>
         </div>
-        {proposalData ? (
-          <div className="space-y-4">
-            {proposalData.description && (
-              <p className="text-sm mb-3">{proposalData.description}</p>
-            )}
-            <div className="space-y-3">
-              {proposalData.topics.map((topic, index) => (
-                <ProposalCard
-                  key={`${topic.id}-${index}`}
-                  id={topic.id}
-                  title={topic.title}
-                  excerpt={topic.excerpt}
-                  created_at={topic.created_at}
-                  username={topic.author}
-                  topic_id={topic.id}
-                  topic_slug={topic.slug}
-                  reply_count={topic.reply_count}
-                  views={topic.views}
-                  last_posted_at={topic.last_posted_at}
-                />
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div
-            className={proseClass}
-            dangerouslySetInnerHTML={renderMarkdownContent(markdown, content)}
-          />
-        )}
+        <div
+          className={proseClass}
+          dangerouslySetInnerHTML={renderMarkdownContent(
+            markdown,
+            displayContent ?? content
+          )}
+        />
         {showProof && (
           <VerificationProof
             verification={verification}

@@ -13,7 +13,10 @@ import {
   type MessageProof,
 } from "@/types/agent-ui";
 import type { VerificationMetadata } from "@/types/agui-events";
-import type { RemoteProof } from "@/components/verification/VerificationProof";
+import {
+  VerificationProof,
+  type RemoteProof,
+} from "@/components/verification/VerificationProof";
 import {
   ToolHistoryCard,
   type ToolHistoryStatus,
@@ -123,6 +126,9 @@ const extractProposalListFromTool = (
   if (!tool.output || typeof tool.output !== "string") return null;
   return parseProposalListPayload(tool.output);
 };
+
+const stripProposalJsonBlock = (content: string): string =>
+  content.replace(/```json[\s\S]*?```/gi, "").trim();
 
 
 export const ChatMessages = ({
@@ -300,6 +306,40 @@ export const ChatMessages = ({
           </div>
         </div>
       ) : null;
+    const shouldSuppressMessage =
+      event.kind === "message" &&
+      messageHasProposalJson &&
+      Boolean(turnInfo?.proposalList);
+
+    const suppressedVerificationElement =
+      shouldSuppressMessage &&
+      event.kind === "message" &&
+      event.role === "assistant" &&
+      (event.verification || event.proof || event.remoteProof) ? (
+        <div className="mt-3">
+          <VerificationProof
+            verification={event.verification}
+            verificationId={event.proof?.verificationId ?? event.messageId}
+            model={model}
+            requestHash={event.proof?.requestHash}
+            responseHash={event.proof?.responseHash}
+            nonce={event.proof?.nonce ?? undefined}
+            expectedArch={event.proof?.arch ?? undefined}
+            expectedDeviceCertHash={event.proof?.deviceCertHash ?? undefined}
+            expectedRimHash={event.proof?.rimHash ?? undefined}
+            expectedUeid={event.proof?.ueid ?? undefined}
+            expectedMeasurements={event.proof?.measurements ?? undefined}
+            prefetchedProof={event.remoteProof ?? undefined}
+            triggerLabel={
+              event.proof?.stage === "final_synthesis"
+                ? "Verify recommendation"
+                : event.proof?.stage === "initial_reasoning"
+                ? "Verify reasoning"
+                : undefined
+            }
+          />
+        </div>
+      ) : null;
 
     const toolHistoryElement =
       shouldShowToolHistory && turnInfo ? (
@@ -317,6 +357,22 @@ export const ChatMessages = ({
 
     switch (event.kind) {
       case "message":
+        const sanitizedContent = messageHasProposalJson
+          ? stripProposalJsonBlock(event.content) ||
+            turnInfo?.proposalList?.description ||
+            "Proposal results:"
+          : event.content;
+
+        if (shouldSuppressMessage) {
+          return (
+            <Fragment key={event.id}>
+              {proposalListElement}
+              {suppressedVerificationElement}
+              {toolHistoryElement}
+            </Fragment>
+          );
+        }
+
         return (
           <Fragment key={event.id}>
             <Message
@@ -324,6 +380,7 @@ export const ChatMessages = ({
               label={displayRoleMeta?.label}
               rawRole={event.role}
               content={event.content}
+              displayContent={sanitizedContent}
               timestamp={event.timestamp}
               messageId={event.messageId}
               verification={event.verification}

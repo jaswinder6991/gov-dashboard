@@ -169,6 +169,9 @@ export const eventsReducer = (
 const selectEventsArray = (state: EventsState) =>
   state.order.map((id) => state.byId[id]).filter(Boolean) as AgentUIEvent[];
 
+const stripJsonBlocks = (content: string): string =>
+  content.replace(/```json[\s\S]*?```/gi, "").trim();
+
 export const selectConversationHistory = (
   state: EventsState
 ): Array<{ role: AgentRole; content: string }> =>
@@ -179,7 +182,10 @@ export const selectConversationHistory = (
     .map((event) => {
       const mappedRole = mapMessageRoleToAgentRole(event.role);
       if (!mappedRole) return null;
-      return { role: mappedRole, content: event.content };
+      const sanitizedContent =
+        mappedRole === "assistant" ? stripJsonBlocks(event.content) : event.content;
+      if (!sanitizedContent) return null;
+      return { role: mappedRole, content: sanitizedContent };
     })
     .filter(
       (entry): entry is { role: AgentRole; content: string } => entry !== null
@@ -751,6 +757,7 @@ export const Chat = ({
       dispatchEvents({ type: "set_all", events: [] });
       setError(null);
       setCurrentTurn(0);
+      agentStateRef.current = undefined;
       streamingAssistantIdRef.current = null;
       if (typeof window !== "undefined") {
         sessionStorage.removeItem(SESSION_STORAGE_KEY);

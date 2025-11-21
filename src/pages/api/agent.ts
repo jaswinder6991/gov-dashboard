@@ -53,6 +53,11 @@ type ToolCallArgs = {
 };
 
 type DiscourseSearchResult = Awaited<ReturnType<typeof searchDiscourse>>;
+type ToolMessage = {
+  role: "tool";
+  content: string;
+  tool_call_id: string;
+};
 
 // Generate unique IDs
 function generateId(prefix: string): string {
@@ -80,6 +85,11 @@ async function searchDiscourse(
     excerpt: string;
     url: string;
     createdAt: string;
+    topicSlug?: string;
+    topicTitle?: string;
+    replyCount?: number;
+    views?: number;
+    lastPostedAt?: string;
   }>;
   totalMatches: number;
 }> {
@@ -110,8 +120,20 @@ async function searchDiscourse(
     postId: post.id,
     author: post.username,
     excerpt: stripHtml(post.cooked || "").slice(0, 400),
-    url: `${servicesConfig.discourseBaseUrl}/p/${post.id}`,
+    url:
+      post.topic_slug && post.topic_id
+        ? `${servicesConfig.discourseBaseUrl}/t/${post.topic_slug}/${post.topic_id}`
+        : `${servicesConfig.discourseBaseUrl}/p/${post.id}`,
     createdAt: post.created_at,
+    topicSlug: post.topic_slug,
+    topicTitle: post.topic_title,
+    replyCount:
+      post.reply_count ??
+      post.topic_posts_count ??
+      post.topic_reply_count ??
+      0,
+    views: post.topic_views ?? 0,
+    lastPostedAt: post.topic_bumped_at ?? post.created_at,
   }));
 
   return {
@@ -179,6 +201,298 @@ async function fetchCanonicalHashes(
   }
 
   return null;
+}
+
+async function executeToolCall({
+  toolCall,
+  runtimeBaseUrl,
+  writeEvent,
+}: {
+  toolCall: NonNullable<CompletionMessage["tool_calls"]>[number];
+  runtimeBaseUrl: string;
+  writeEvent: (event: AGUIEvent) => void;
+}): Promise<ToolMessage | null> {
+  const toolCallId = toolCall.id;
+  const toolName = toolCall.function.name;
+  let args: ToolCallArgs | null = null;
+
+  try {
+    args = JSON.parse(toolCall.function.arguments || "{}") as ToolCallArgs;
+  } catch (parseError) {
+    const errorMessage =
+      parseError instanceof Error ? parseError.message : "Invalid tool arguments";
+    const errorResult = {
+      error: `Failed to parse tool arguments: ${errorMessage}`,
+    };
+
+    writeEvent({
+      type: EventType.TOOL_CALL_RESULT,
+      messageId: generateId("tool_result"),
+      toolCallId,
+      content: JSON.stringify(errorResult, null, 2),
+      role: "tool",
+      timestamp: Date.now(),
+    });
+
+    return {
+      role: "tool",
+      content: JSON.stringify(errorResult),
+      tool_call_id: toolCallId,
+    };
+  }
+
+  if (!args) {
+    return null;
+  }
+
+  let result:
+    | Evaluation
+    | { title: string; content: string; status: string }
+    | DiscourseSearchResult
+    | Record<string, unknown>
+    | null = null;
+
+  if (toolName === "screen_proposal" && args.title && args.content) {
+    const screeningResult = await requestEvaluation(args.title, args.content);
+    result = screeningResult.evaluation;
+
+    writeEvent({
+      type: EventType.STATE_DELTA,
+      delta: [
+        {
+          op: "replace",
+          path: "/evaluation",
+          value: screeningResult.evaluation,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+  } else if (toolName === "write_proposal" && args.title && args.content) {
+    result = {
+      title: args.title,
+      content: args.content,
+      status: "pending_confirmation",
+    };
+
+    writeEvent({
+      type: EventType.STATE_DELTA,
+      delta: [
+        {
+          op: "replace",
+          path: "/title",
+          value: args.title,
+        },
+        {
+          op: "replace",
+          path: "/content",
+          value: args.content,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+  } else if (toolName === "search_discourse" && args.query) {
+    const limit =
+      typeof args.limit === "number" ? args.limit : Number(args.limit ?? 5);
+    const boundedLimit =
+      Number.isFinite(limit) && limit > 0 ? Math.min(limit, 10) : 5;
+    try {
+      const searchResult = await searchDiscourse(args.query, boundedLimit);
+      const topics = searchResult.results.map((entry) => ({
+        id: entry.topicId ?? entry.postId,
+        title:
+          entry.topicTitle || `Post #${entry.postId}` || `Result ${entry.postId}`,
+        slug:
+          entry.topicSlug ||
+          (entry.topicId ? `topic-${entry.topicId}` : `post-${entry.postId}`),
+        excerpt: entry.excerpt,
+        author: entry.author,
+        created_at: entry.createdAt,
+        topic_id: entry.topicId ?? entry.postId,
+        topic_slug:
+          entry.topicSlug ||
+          (entry.topicId ? `${entry.topicId}` : `post-${entry.postId}`),
+        reply_count: entry.replyCount ?? 0,
+        views: entry.views ?? 0,
+        last_posted_at: entry.lastPostedAt ?? entry.createdAt,
+      }));
+
+      result = {
+        type: "proposal_list",
+        description: topics.length
+          ? `Top ${topics.length} search results for "${args.query}".`
+          : `No proposals found for "${args.query}".`,
+        topics,
+        total_count: searchResult.totalMatches,
+        query: searchResult.query,
+      };
+    } catch (searchError) {
+      result = {
+        error:
+          searchError instanceof Error
+            ? searchError.message
+            : "Failed to search Discourse",
+      };
+    }
+  } else if (toolName === "get_discourse_topic" && args.topic_id) {
+    try {
+      const topicResponse = await fetch(
+        `${servicesConfig.discourseBaseUrl}/t/${args.topic_id}.json`
+      );
+      if (!topicResponse.ok) {
+        throw new Error(`Failed to fetch topic: ${topicResponse.status}`);
+      }
+      const topic = await topicResponse.json();
+      const posts = topic.post_stream?.posts || [];
+      result = {
+        id: topic.id,
+        title: topic.title,
+        slug: topic.slug,
+        posts_count: topic.posts_count,
+        views: topic.views,
+        like_count: topic.like_count,
+        participant_count: topic.participant_count,
+        created_at: topic.post_stream?.posts?.[0]?.created_at,
+        last_posted_at: topic.last_posted_at,
+        url: `${servicesConfig.discourseBaseUrl}/t/${topic.slug}/${topic.id}`,
+        posts: posts.slice(0, 20).map((post: any) => ({
+          id: post.id,
+          post_number: post.post_number,
+          username: post.username,
+          content: stripHtml(post.cooked || "").slice(0, 800),
+          created_at: post.created_at,
+          like_count:
+            post.actions_summary?.find((a: any) => a.id === 2)?.count || 0,
+          reply_to_post_number: post.reply_to_post_number,
+          reply_to_user: post.reply_to_user?.username,
+          url: `${servicesConfig.discourseBaseUrl}/t/${topic.slug}/${topic.id}/${post.post_number}`,
+        })),
+      };
+    } catch (topicError) {
+      result = {
+        error:
+          topicError instanceof Error
+            ? topicError.message
+            : "Failed to fetch topic",
+      };
+    }
+  } else if (toolName === "get_latest_topics") {
+    const limit = typeof args.limit === "number" ? Math.min(args.limit, 30) : 10;
+    try {
+      const latestResponse = await fetch(
+        `${runtimeBaseUrl}/api/discourse/latest?per_page=${limit}`
+      );
+      if (!latestResponse.ok) {
+        throw new Error(
+          `Failed to fetch latest topics: ${latestResponse.status}`
+        );
+      }
+      const data = await latestResponse.json();
+      result = {
+        type: "proposal_list",
+        description: `Latest ${limit} proposals by recent activity.`,
+        topics:
+          data.latest_posts?.slice(0, limit).map((topic: any) => ({
+            id: topic.topic_id,
+            title: topic.title,
+            slug: topic.topic_slug,
+            excerpt: topic.excerpt,
+            author: topic.username,
+            posts_count: topic.posts_count,
+            reply_count: topic.reply_count,
+            views: topic.views,
+            like_count: topic.like_count,
+            created_at: topic.created_at,
+            last_posted_at: topic.last_posted_at,
+            url: `${servicesConfig.discourseBaseUrl}/t/${topic.topic_slug}/${topic.topic_id}`,
+          })) || [],
+        total_count: data.latest_posts?.length || 0,
+      };
+    } catch (latestError) {
+      result = {
+        error:
+          latestError instanceof Error
+            ? latestError.message
+            : "Failed to fetch latest topics",
+      };
+    }
+  } else if (toolName === "summarize_discussion" && args.topic_id) {
+    try {
+      const summaryResponse = await fetch(
+        `${runtimeBaseUrl}/api/discourse/topics/${args.topic_id}/summarize`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+      if (!summaryResponse.ok) {
+        throw new Error(
+          `Failed to summarize discussion: ${summaryResponse.status}`
+        );
+      }
+      const summaryData = await summaryResponse.json();
+      result = {
+        topic_id: args.topic_id,
+        title: summaryData.title,
+        summary: summaryData.summary,
+        reply_count: summaryData.replyCount,
+        engagement: summaryData.engagement,
+        url: `${servicesConfig.discourseBaseUrl}/t/${args.topic_id}`,
+      };
+    } catch (summaryError) {
+      result = {
+        error:
+          summaryError instanceof Error
+            ? summaryError.message
+            : "Failed to summarize discussion",
+      };
+    }
+  } else if (toolName === "summarize_reply" && args.post_id) {
+    try {
+      const replyResponse = await fetch(
+        `${runtimeBaseUrl}/api/discourse/replies/${args.post_id}/summarize`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+      if (!replyResponse.ok) {
+        throw new Error(
+          `Failed to summarize reply: ${replyResponse.status}`
+        );
+      }
+      const replyData = await replyResponse.json();
+      result = {
+        post_id: args.post_id,
+        author: replyData.author,
+        post_number: replyData.postNumber,
+        summary: replyData.summary,
+        like_count: replyData.likeCount,
+        reply_to: replyData.replyTo,
+      };
+    } catch (replyError) {
+      result = {
+        error:
+          replyError instanceof Error
+            ? replyError.message
+            : "Failed to summarize reply",
+      };
+    }
+  }
+
+  writeEvent({
+    type: EventType.TOOL_CALL_RESULT,
+    messageId: generateId("tool_result"),
+    toolCallId,
+    content: JSON.stringify(result, null, 2),
+    role: "tool",
+    timestamp: Date.now(),
+  });
+
+  return {
+    role: "tool",
+    content: JSON.stringify(result),
+    tool_call_id: toolCallId,
+  };
 }
 
 export default async function handler(
@@ -641,279 +955,17 @@ export default async function handler(
         { count: message.tool_calls.length }
       );
 
-      const toolMessages: Array<{
-        role: "tool";
-        content: string;
-        tool_call_id: string;
-      }> = [];
+      const toolMessages: ToolMessage[] = [];
 
       for (const toolCall of message.tool_calls) {
-        const toolCallId = toolCall.id;
-        const toolName = toolCall.function.name;
-        let args: ToolCallArgs | null = null;
-
-        try {
-          args = JSON.parse(toolCall.function.arguments || "{}") as ToolCallArgs;
-        } catch (parseError) {
-          const errorMessage =
-            parseError instanceof Error
-              ? parseError.message
-              : "Invalid tool arguments";
-          const errorResult = {
-            error: `Failed to parse tool arguments: ${errorMessage}`,
-          };
-
-          writeEvent({
-            type: EventType.TOOL_CALL_RESULT,
-            messageId: generateId("tool_result"),
-            toolCallId,
-            content: JSON.stringify(errorResult, null, 2),
-            role: "tool",
-            timestamp: Date.now(),
-          });
-
-          toolMessages.push({
-            role: "tool",
-            content: JSON.stringify(errorResult),
-            tool_call_id: toolCallId,
-          });
-
-          continue;
-        }
-
-        if (!args) {
-          continue;
-        }
-
-        let result:
-          | Evaluation
-          | { title: string; content: string; status: string }
-          | DiscourseSearchResult
-          | Record<string, unknown>
-          | null = null;
-
-        if (toolName === "screen_proposal" && args.title && args.content) {
-          const screeningResult = await requestEvaluation(
-            args.title,
-            args.content
-          );
-          result = screeningResult.evaluation;
-
-          writeEvent({
-            type: EventType.STATE_DELTA,
-            delta: [
-              {
-                op: "replace",
-                path: "/evaluation",
-                value: screeningResult.evaluation,
-              },
-            ],
-            timestamp: Date.now(),
-          });
-        } else if (
-          toolName === "write_proposal" &&
-          args.title &&
-          args.content
-        ) {
-          result = {
-            title: args.title,
-            content: args.content,
-            status: "pending_confirmation",
-          };
-
-          writeEvent({
-            type: EventType.STATE_DELTA,
-            delta: [
-              {
-                op: "replace",
-                path: "/title",
-                value: args.title,
-              },
-              {
-                op: "replace",
-                path: "/content",
-                value: args.content,
-              },
-            ],
-            timestamp: Date.now(),
-          });
-        } else if (toolName === "search_discourse" && args.query) {
-          const limit =
-            typeof args.limit === "number"
-              ? args.limit
-              : Number(args.limit ?? 5);
-          const boundedLimit =
-            Number.isFinite(limit) && limit > 0 ? Math.min(limit, 10) : 5;
-          try {
-            result = await searchDiscourse(args.query, boundedLimit);
-          } catch (searchError) {
-            result = {
-              error:
-                searchError instanceof Error
-                  ? searchError.message
-                  : "Failed to search Discourse",
-            };
-          }
-        } else if (toolName === "get_discourse_topic" && args.topic_id) {
-          try {
-            const topicResponse = await fetch(
-              `${servicesConfig.discourseBaseUrl}/t/${args.topic_id}.json`
-            );
-            if (!topicResponse.ok) {
-              throw new Error(`Failed to fetch topic: ${topicResponse.status}`);
-            }
-            const topic = await topicResponse.json();
-            const posts = topic.post_stream?.posts || [];
-            result = {
-              id: topic.id,
-              title: topic.title,
-              slug: topic.slug,
-              posts_count: topic.posts_count,
-              views: topic.views,
-              like_count: topic.like_count,
-              participant_count: topic.participant_count,
-              created_at: topic.post_stream?.posts?.[0]?.created_at,
-              last_posted_at: topic.last_posted_at,
-              url: `${servicesConfig.discourseBaseUrl}/t/${topic.slug}/${topic.id}`,
-              posts: posts.slice(0, 20).map((post: any) => ({
-                id: post.id,
-                post_number: post.post_number,
-                username: post.username,
-                content: stripHtml(post.cooked || "").slice(0, 800),
-                created_at: post.created_at,
-                like_count:
-                  post.actions_summary?.find((a: any) => a.id === 2)?.count ||
-                  0,
-                reply_to_post_number: post.reply_to_post_number,
-                reply_to_user: post.reply_to_user?.username,
-                url: `${servicesConfig.discourseBaseUrl}/t/${topic.slug}/${topic.id}/${post.post_number}`,
-              })),
-            };
-          } catch (topicError) {
-            result = {
-              error:
-                topicError instanceof Error
-                  ? topicError.message
-                  : "Failed to fetch topic",
-            };
-          }
-        } else if (toolName === "get_latest_topics") {
-          const limit =
-            typeof args.limit === "number" ? Math.min(args.limit, 30) : 10;
-          try {
-            const latestResponse = await fetch(
-              `${runtimeBaseUrl}/api/discourse/latest?per_page=${limit}`
-            );
-            if (!latestResponse.ok) {
-              throw new Error(
-                `Failed to fetch latest topics: ${latestResponse.status}`
-              );
-            }
-            const data = await latestResponse.json();
-            result = {
-              topics:
-                data.latest_posts?.slice(0, limit).map((topic: any) => ({
-                  id: topic.topic_id,
-                  title: topic.title,
-                  slug: topic.topic_slug,
-                  excerpt: topic.excerpt,
-                  author: topic.username,
-                  posts_count: topic.posts_count,
-                  reply_count: topic.reply_count,
-                  views: topic.views,
-                  like_count: topic.like_count,
-                  created_at: topic.created_at,
-                  last_posted_at: topic.last_posted_at,
-                  url: `${servicesConfig.discourseBaseUrl}/t/${topic.topic_slug}/${topic.topic_id}`,
-                })) || [],
-              total_count: data.latest_posts?.length || 0,
-            };
-          } catch (latestError) {
-            result = {
-              error:
-                latestError instanceof Error
-                  ? latestError.message
-                  : "Failed to fetch latest topics",
-            };
-          }
-        } else if (toolName === "summarize_discussion" && args.topic_id) {
-          try {
-            const summaryResponse = await fetch(
-              `${runtimeBaseUrl}/api/discourse/topics/${args.topic_id}/summarize`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-              }
-            );
-            if (!summaryResponse.ok) {
-              throw new Error(
-                `Failed to summarize discussion: ${summaryResponse.status}`
-              );
-            }
-            const summaryData = await summaryResponse.json();
-            result = {
-              topic_id: args.topic_id,
-              title: summaryData.title,
-              summary: summaryData.summary,
-              reply_count: summaryData.replyCount,
-              engagement: summaryData.engagement,
-              url: `${servicesConfig.discourseBaseUrl}/t/${args.topic_id}`,
-            };
-          } catch (summaryError) {
-            result = {
-              error:
-                summaryError instanceof Error
-                  ? summaryError.message
-                  : "Failed to summarize discussion",
-            };
-          }
-        } else if (toolName === "summarize_reply" && args.post_id) {
-          try {
-            const replyResponse = await fetch(
-              `${runtimeBaseUrl}/api/discourse/replies/${args.post_id}/summarize`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-              }
-            );
-            if (!replyResponse.ok) {
-              throw new Error(
-                `Failed to summarize reply: ${replyResponse.status}`
-              );
-            }
-            const replyData = await replyResponse.json();
-            result = {
-              post_id: args.post_id,
-              author: replyData.author,
-              post_number: replyData.postNumber,
-              summary: replyData.summary,
-              like_count: replyData.likeCount,
-              reply_to: replyData.replyTo,
-            };
-          } catch (replyError) {
-            result = {
-              error:
-                replyError instanceof Error
-                  ? replyError.message
-                  : "Failed to summarize reply",
-            };
-          }
-        }
-
-        writeEvent({
-          type: EventType.TOOL_CALL_RESULT,
-          messageId: generateId("tool_result"),
-          toolCallId,
-          content: JSON.stringify(result, null, 2),
-          role: "tool",
-          timestamp: Date.now(),
+        const toolMessage = await executeToolCall({
+          toolCall,
+          runtimeBaseUrl,
+          writeEvent,
         });
-
-        toolMessages.push({
-          role: "tool",
-          content: JSON.stringify(result),
-          tool_call_id: toolCallId,
-        });
+        if (toolMessage) {
+          toolMessages.push(toolMessage);
+        }
       }
 
       if (toolStepStarted) {
