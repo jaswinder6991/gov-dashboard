@@ -67,6 +67,7 @@ export function deriveVerificationState({
     signatureAddress,
     hasProof: !!proof,
   });
+  const hasProof = !!proof;
 
   const steps: VerificationState["steps"] = {
     hash: { status: "pending" },
@@ -154,7 +155,20 @@ export function deriveVerificationState({
   }
 
   // Nonce step
-  if (nonceCheck) {
+  if (!nonceCheck) {
+    steps.nonce = hasProof
+      ? {
+          status: "error",
+          message: "Nonce not validated - missing nonce check",
+        }
+      : {
+          status: "pending",
+          message: "Waiting for proof to validate nonce",
+        };
+    if (hasProof) {
+      reasons.push("Nonce not validated");
+    }
+  } else if (nonceCheck) {
     if (nonceCheck.valid) {
       steps.nonce = { status: "success", message: "Nonce bound" };
     } else {
@@ -167,12 +181,6 @@ export function deriveVerificationState({
       };
       reasons.push("Nonce mismatch");
     }
-  } else {
-    steps.nonce = {
-      status: "error",
-      message: "Nonce not validated - missing nonce check",
-    };
-    reasons.push("Nonce not validated");
   }
 
   // GPU

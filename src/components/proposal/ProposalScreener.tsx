@@ -35,6 +35,7 @@ export const ProposalScreener = () => {
   const [verificationMeta, setVerificationMeta] =
     useState<VerificationMetadata | null>(null);
   const [verificationId, setVerificationId] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(null);
 
   const evaluateProposal = async () => {
     if (!title.trim()) {
@@ -51,6 +52,7 @@ export const ProposalScreener = () => {
     setResult(null);
     setVerificationMeta(null);
     setVerificationId(null);
+    setModel(null);
 
     try {
       const response = await fetch("/api/screen", {
@@ -78,12 +80,14 @@ export const ProposalScreener = () => {
         evaluation: Evaluation;
         verification?: VerificationMetadata | null;
         verificationId?: string | null;
+        model?: string | null;
       } = await response.json();
       setResult(data.evaluation);
       setVerificationMeta(data.verification ?? null);
       setVerificationId(
         data.verificationId ?? data.verification?.messageId ?? null
       );
+      setModel(data.model ?? data.evaluation?.model ?? null);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Failed to evaluate proposal";
@@ -331,6 +335,7 @@ export const ProposalScreener = () => {
                   <VerificationProof
                     verification={verificationMeta ?? undefined}
                     verificationId={verificationId ?? undefined}
+                    model={model ?? result?.model ?? undefined}
                     className="mt-3"
                   />
                 )}

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/tooltip";
 import { ChevronDown, CheckCircle2, XCircle, Info } from "lucide-react";
 import { VerificationProof } from "@/components/verification/VerificationProof";
+import type { RemoteProof } from "@/components/verification/VerificationProof";
 import { Markdown } from "@/components/proposal/Markdown";
 
 interface ScreeningBadgeProps {
@@ -26,9 +27,18 @@ interface ScreeningBadgeProps {
     revisionNumber: number;
     qualityScore: number;
     attentionScore: number;
+    model?: string;
   };
   verification?: VerificationMetadata;
   verificationId?: string;
+  nonce?: string;
+  expectedArch?: string | null;
+  expectedDeviceCertHash?: string | null;
+  expectedRimHash?: string | null;
+  expectedUeid?: string | null;
+  expectedMeasurements?: string[] | null;
+  prefetchedProof?: RemoteProof | null;
+  autoFetchProof?: boolean;
 }
 
 const QUALITY_CRITERIA = [
@@ -87,6 +97,14 @@ export function ScreeningBadge({
   screening,
   verification,
   verificationId,
+  nonce,
+  expectedArch,
+  expectedDeviceCertHash,
+  expectedRimHash,
+  expectedUeid,
+  expectedMeasurements,
+  prefetchedProof,
+  autoFetchProof = false,
 }: ScreeningBadgeProps) {
   const [expandedQualityCriteria, setExpandedQualityCriteria] = useState<
     Set<string>
@@ -410,6 +428,17 @@ export function ScreeningBadge({
               <VerificationProof
                 verification={verification}
                 verificationId={verificationId}
+                model={
+                  screening.model ?? screening.evaluation.model ?? undefined
+                }
+                nonce={nonce}
+                expectedArch={expectedArch}
+                expectedDeviceCertHash={expectedDeviceCertHash}
+                expectedRimHash={expectedRimHash}
+                expectedUeid={expectedUeid}
+                expectedMeasurements={expectedMeasurements}
+                prefetchedProof={prefetchedProof ?? undefined}
+                autoFetch={autoFetchProof}
                 className="mt-4"
               />
             )}

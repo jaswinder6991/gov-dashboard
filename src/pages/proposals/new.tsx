@@ -5,7 +5,6 @@ import { useNear } from "@/hooks/useNear";
 import type { Evaluation } from "@/types/evaluation";
 import type { VerificationMetadata } from "@/types/agui-events";
 import { ProposalForm } from "@/components/proposal/ProposalForm";
-import { ScreeningResults } from "@/components/proposal/screening/ScreeningResults";
 import { ScreeningBadge } from "@/components/proposal/screening/ScreeningBadge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -23,6 +22,14 @@ export default function NewProposalPage() {
   const [verificationMeta, setVerificationMeta] =
     useState<VerificationMetadata | null>(null);
   const [verificationId, setVerificationId] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(null);
+  const [expectations, setExpectations] = useState<{
+    arch?: string | null;
+    deviceCertHash?: string | null;
+    rimHash?: string | null;
+    ueid?: string | null;
+    measurements?: string[] | null;
+  } | null>(null);
   const [remainingEvaluations, setRemainingEvaluations] = useState<
     number | null
   >(null);
@@ -41,6 +48,8 @@ export default function NewProposalPage() {
     setResult(null);
     setVerificationMeta(null);
     setVerificationId(null);
+    setModel(null);
+    setExpectations(null);
 
     try {
       const response = await fetch("/api/evaluateDraft", {
@@ -81,10 +90,27 @@ export default function NewProposalPage() {
         evaluation: Evaluation;
         verification?: VerificationMetadata | null;
         verificationId?: string | null;
+        model?: string | null;
+        expectations?: {
+          arch?: string | null;
+          deviceCertHash?: string | null;
+          rimHash?: string | null;
+          ueid?: string | null;
+          measurements?: string[] | null;
+        } | null;
+        expectationsFetchFailed?: boolean;
       } = await response.json();
       setResult(data.evaluation);
       setVerificationMeta(data.verification ?? null);
       setVerificationId(data.verificationId ?? data.verification?.messageId ?? null);
+      setModel(data.model ?? null);
+      setExpectations(data.expectations ?? null);
+
+      if (data.expectationsFetchFailed) {
+        console.warn(
+          "[NewProposal] Hardware expectations unavailable - client-side verification may be limited. Server-side verification will still validate the proof."
+        );
+      }
     } catch (err: unknown) {
       console.error("Evaluation error:", err);
       const message =
@@ -168,9 +194,19 @@ export default function NewProposalPage() {
                   revisionNumber: 1,
                   qualityScore: result.qualityScore,
                   attentionScore: result.attentionScore,
+                  model: model ?? undefined,
                 }}
                 verification={verificationMeta ?? undefined}
                 verificationId={verificationId ?? undefined}
+                nonce={verificationMeta?.nonce ?? undefined}
+                expectedArch={expectations?.arch ?? undefined}
+                expectedDeviceCertHash={expectations?.deviceCertHash ?? undefined}
+                expectedRimHash={expectations?.rimHash ?? undefined}
+                expectedUeid={expectations?.ueid ?? undefined}
+                expectedMeasurements={
+                  expectations?.measurements ?? undefined
+                }
+                autoFetchProof
               />
             </div>
           </>

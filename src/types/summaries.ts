@@ -22,7 +22,7 @@ export interface TextSummaryResponse {
   summary: string;
   cached?: boolean;
   cacheAge?: number;
-  model?: string | null;
+  model: string;
   verification?: VerificationMetadata | null;
   verificationId?: string | null;
   proof?: SummaryProof | null;

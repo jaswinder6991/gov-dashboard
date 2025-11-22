@@ -29,6 +29,7 @@ export function ScreeningButton({
   const [verificationMeta, setVerificationMeta] =
     useState<VerificationMetadata | null>(null);
   const [verificationId, setVerificationId] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(null);
 
   const prepareContent = (html: string): string => {
     const normalized = html;
@@ -51,6 +52,7 @@ export function ScreeningButton({
     setResult(null);
     setVerificationMeta(null);
     setVerificationId(null);
+    setModel(null);
 
     try {
       if (!wallet)
@@ -134,6 +136,13 @@ export function ScreeningButton({
       setResult(evaluation);
       setVerificationMeta(verification);
       setVerificationId(proofVerificationId ?? verification?.messageId ?? null);
+      const responseModel =
+        typeof saveData === "object" &&
+        saveData !== null &&
+        "model" in saveData
+          ? (saveData as { model?: string | null }).model ?? null
+          : null;
+      setModel(responseModel ?? evaluation.model ?? null);
       onScreeningComplete?.();
     } catch (err: unknown) {
       const message =
@@ -188,6 +197,7 @@ export function ScreeningButton({
           <VerificationProof
             verification={verificationMeta ?? undefined}
             verificationId={verificationId ?? undefined}
+            model={model ?? result?.model ?? undefined}
           />
         </div>
       )}

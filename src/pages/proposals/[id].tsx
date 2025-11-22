@@ -56,6 +56,7 @@ interface ScreeningData {
   revisionNumber: number;
   qualityScore: number;
   attentionScore: number;
+  model?: string;
   verification?: VerificationMetadata | null;
   verificationId?: string | null;
 }
@@ -216,7 +217,11 @@ export default function ProposalDetail() {
         setScreening(null);
       } else if (response.ok) {
         const data = await response.json();
-        setScreening(data);
+        const normalized = {
+          ...data,
+          model: data.model ?? data.evaluation?.model ?? undefined,
+        };
+        setScreening(normalized);
       } else {
         console.error("Unexpected error fetching screening:", response.status);
       }
@@ -1101,7 +1106,7 @@ export default function ProposalDetail() {
                     <Card>
                       <CardContent className="pt-6">
                         <p className="text-sm text-muted-foreground">
-                          Connect NEAR wallet to sign proposal evaluation.
+                          Connect your NEAR wallet to evaluate this proposal.
                         </p>
                       </CardContent>
                     </Card>

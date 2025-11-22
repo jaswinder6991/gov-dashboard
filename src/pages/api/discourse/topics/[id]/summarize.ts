@@ -11,7 +11,10 @@ import type {
   DiscourseTopic,
 } from "@/types/discourse";
 import type { ApiErrorResponse } from "@/types/api";
-import type { DiscussionSummaryResponse, SummaryProof } from "@/types/summaries";
+import type {
+  DiscussionSummaryResponse,
+  SummaryProof,
+} from "@/types/summaries";
 import {
   extractVerificationMetadata,
   normalizeVerificationPayload,
@@ -129,6 +132,8 @@ export default async function handler(
       });
     }
 
+    const model = "deepseek-ai/DeepSeek-V3.1";
+
     // ===================================================================
     // FETCH FROM DISCOURSE (NO AUTH)
     // ===================================================================
@@ -175,6 +180,7 @@ export default async function handler(
         },
         generatedAt: Date.now(),
         cached: false,
+        model,
       };
       return res.status(200).json(emptyResponse);
     }
@@ -192,10 +198,8 @@ export default async function handler(
       (post: DiscoursePost) => ({
         ...post,
         likeCount:
-          post.actions_summary?.find(
-            (a: DiscourseActionSummary) => a.id === 2
-          )?.count ||
-          0,
+          post.actions_summary?.find((a: DiscourseActionSummary) => a.id === 2)
+            ?.count || 0,
       })
     );
 
@@ -293,7 +297,6 @@ ${truncatedOriginal}
       truncatedDiscussion
     );
 
-    const model = "deepseek-ai/DeepSeek-V3.1";
     const nearRequest = {
       model,
       messages: [{ role: "user", content: prompt }],
@@ -314,7 +317,10 @@ ${truncatedOriginal}
     try {
       expectations = await getModelExpectations(model);
     } catch (err) {
-      console.error("[Discussion Summary] Failed to fetch hardware expectations:", err);
+      console.error(
+        "[Discussion Summary] Failed to fetch hardware expectations:",
+        err
+      );
     }
 
     const summaryResponse = await fetch(
@@ -387,6 +393,7 @@ ${truncatedOriginal}
       },
       generatedAt: Date.now(), // For cache age tracking
       cached: false,
+      model,
       verification,
       verificationId: effectiveVerificationId,
       proof: {

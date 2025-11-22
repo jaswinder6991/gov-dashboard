@@ -45,6 +45,7 @@ export function EvaluationSummary({
         <VerificationProof
           verification={verification}
           verificationId={verificationId}
+          model={evaluation.model ?? undefined}
           className="mt-3"
         />
       )}

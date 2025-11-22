@@ -129,6 +129,8 @@ export default async function handler(
       });
     }
 
+    const model = "deepseek-ai/DeepSeek-V3.1";
+
     // ===================================================================
     // FETCH FROM DISCOURSE (NO AUTH)
     // ===================================================================
@@ -164,6 +166,7 @@ export default async function handler(
         truncated: false,
         generatedAt: Date.now(),
         cached: false,
+        model,
       };
       return res.status(200).json(emptySummary);
     }
@@ -269,7 +272,6 @@ export default async function handler(
       truncatedTimeline
     );
 
-    const model = "deepseek-ai/DeepSeek-V3.1";
     const nearRequest = {
       model,
       messages: [{ role: "user", content: prompt }],
@@ -290,7 +292,10 @@ export default async function handler(
     try {
       expectations = await getModelExpectations(model);
     } catch (err) {
-      console.error("[Post Revision Summary] Failed to fetch hardware expectations:", err);
+      console.error(
+        "[Post Revision Summary] Failed to fetch hardware expectations:",
+        err
+      );
     }
 
     const summaryResponse = await fetch(

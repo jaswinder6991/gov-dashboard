@@ -68,6 +68,7 @@ interface VerificationProofProps {
   prefetchedProof?: RemoteProof | null;
   className?: string;
   triggerLabel?: string;
+  autoFetch?: boolean;
 }
 
 export function VerificationProof({
@@ -85,6 +86,7 @@ export function VerificationProof({
   prefetchedProof = null,
   className,
   triggerLabel = "View proof details",
+  autoFetch = false,
 }: VerificationProofProps) {
   const [open, setOpen] = useState(false);
   const [remoteProof, setRemoteProof] = useState<RemoteProof | null>(
@@ -767,7 +769,13 @@ export function VerificationProof({
   }, [verificationId, prefetchedProof]);
 
   useEffect(() => {
-    if (!open || remoteProof || !verificationId || !expectationsReady) return;
+    if (
+      (!open && !autoFetch) ||
+      remoteProof ||
+      !verificationId ||
+      !expectationsReady
+    )
+      return;
 
     const fetchProof = async () => {
       try {
@@ -844,6 +852,7 @@ export function VerificationProof({
     fetchProof();
   }, [
     open,
+    autoFetch,
     verificationId,
     model,
     requestHash,
@@ -931,11 +940,22 @@ export function VerificationProof({
     if (!remoteProof && !verification) return "pending";
     if (loading || independentVerification?.status === "verifying")
       return "pending";
-    if (verification?.status) return verification.status;
+
+    if (verification?.status && verification.status !== "pending") {
+      return verification.status;
+    }
+
     if (verificationState.overall === "verified") return "verified";
     if (verificationState.overall === "failed") return "failed";
-    return "pending";
-  }, [loading, independentVerification?.status, verificationState.overall, remoteProof, verification]);
+
+    return verification?.status ?? "pending";
+  }, [
+    loading,
+    independentVerification?.status,
+    verificationState.overall,
+    remoteProof,
+    verification,
+  ]);
 
   const verificationSections = useMemo(() => {
     const steps = verificationState.steps;

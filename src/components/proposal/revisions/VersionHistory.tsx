@@ -65,6 +65,7 @@ export default function VersionHistory({
         timestamp: string;
         verification?: VerificationMetadata | null;
         verificationId?: string | null;
+        model?: string | null;
       }
     >
   >({});
@@ -116,6 +117,7 @@ export default function VersionHistory({
         timestamp: string;
         verification?: VerificationMetadata | null;
         verificationId?: string | null;
+        model?: string | null;
       }
     > = {};
 
@@ -131,6 +133,9 @@ export default function VersionHistory({
             evaluation: data.evaluation,
             nearAccount: data.nearAccount,
             timestamp: data.timestamp,
+            verification: data.verification ?? null,
+            verificationId: data.verificationId ?? null,
+            model: data.model ?? data.evaluation?.model ?? null,
           };
         }
       } catch (err) {
@@ -241,6 +246,7 @@ export default function VersionHistory({
           timestamp: new Date().toISOString(),
           verification,
           verificationId: proofVerificationId ?? verification?.messageId ?? null,
+          model: saveData.model ?? saveData.evaluation?.model ?? null,
         },
       }));
     } catch (err: unknown) {
@@ -275,6 +281,7 @@ export default function VersionHistory({
               revisionNumber: revisionNumber,
               qualityScore: screeningData.evaluation.qualityScore,
               attentionScore: screeningData.evaluation.attentionScore,
+              model: screeningData.model ?? screeningData.evaluation.model ?? undefined,
             }}
             verification={screeningData.verification ?? undefined}
             verificationId={screeningData.verificationId ?? undefined}

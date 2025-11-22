@@ -28,4 +28,5 @@ export interface Evaluation {
   // Overall Result
   overallPass: boolean;
   summary: string;
+  model?: string;
 }

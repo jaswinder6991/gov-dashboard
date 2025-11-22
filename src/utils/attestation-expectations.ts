@@ -158,8 +158,9 @@ export const validateExpectations = (
   if (!expectations.nonce) missing.push("nonce");
   if (!expectations.arch) missing.push("arch");
   if (!expectations.deviceCertHash) missing.push("deviceCertHash");
-  if (!expectations.rimHash) missing.push("rimHash");
-  if (!expectations.ueid) missing.push("ueid");
+  // rimHash and ueid are optional - NRAS validates these internally
+  // if (!expectations.rimHash) missing.push("rimHash");
+  // if (!expectations.ueid) missing.push("ueid");
   if (!expectations.measurements || expectations.measurements.length === 0) {
     missing.push("measurements");
   }

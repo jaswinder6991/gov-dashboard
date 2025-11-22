@@ -6,6 +6,7 @@ import {
   requestEvaluation,
   respondWithScreeningError,
 } from "@/server/screening";
+import { getModelExpectations } from "@/server/attestation-cache";
 import { createRateLimiter, getClientIdentifier } from "@/server/rateLimiter";
 import { rateLimitConfig } from "@/config/rateLimit";
 
@@ -94,11 +95,20 @@ export default async function handler(
 
   // Request evaluation from AI
   try {
-    const {
-      evaluation,
-      verification,
-      verificationId,
-    } = await requestEvaluation(sanitizedTitle, sanitizedContent);
+    const { evaluation, verification, verificationId, model } =
+      await requestEvaluation(sanitizedTitle, sanitizedContent);
+
+    let expectations: Awaited<
+      ReturnType<typeof getModelExpectations>
+    > | null = null;
+    let expectationsFetchFailed = false;
+    try {
+      expectations = await getModelExpectations(model);
+    } catch (error) {
+      console.error("[EvaluateDraft] Failed to fetch expectations:", error);
+      expectations = null;
+      expectationsFetchFailed = true;
+    }
 
     const logPrefix = isAuthenticated
       ? `[EvaluateDraft] ${accountId}`
@@ -117,6 +127,9 @@ export default async function handler(
       authenticatedAs: accountId,
       verification,
       verificationId,
+      model,
+      expectations,
+      expectationsFetchFailed,
     });
   } catch (error) {
     return respondWithScreeningError(res, error, "Failed to evaluate proposal");

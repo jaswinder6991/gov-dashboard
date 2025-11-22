@@ -67,9 +67,7 @@ const DISCOURSE_URL = servicesConfig.discourseBaseUrl;
  */
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<
-    ProposalRevisionSummaryResponse | ApiErrorResponse
-  >
+  res: NextApiResponse<ProposalRevisionSummaryResponse | ApiErrorResponse>
 ) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -134,6 +132,8 @@ export default async function handler(
       });
     }
 
+    const model = "deepseek-ai/DeepSeek-V3.1";
+
     // ===================================================================
     // FETCH FROM DISCOURSE (NO AUTH)
     // ===================================================================
@@ -181,6 +181,7 @@ export default async function handler(
         truncated: false,
         generatedAt: Date.now(),
         cached: false,
+        model,
       };
       return res.status(200).json(emptySummary);
     }
@@ -309,7 +310,6 @@ export default async function handler(
       truncatedTimeline
     );
 
-    const model = "deepseek-ai/DeepSeek-V3.1";
     const nearRequest = {
       model,
       messages: [{ role: "user", content: prompt }],
@@ -330,7 +330,10 @@ export default async function handler(
     try {
       expectations = await getModelExpectations(model);
     } catch (err) {
-      console.error("[Proposal Revision Summary] Failed to fetch hardware expectations:", err);
+      console.error(
+        "[Proposal Revision Summary] Failed to fetch hardware expectations:",
+        err
+      );
     }
 
     const summaryResponse = await fetch(

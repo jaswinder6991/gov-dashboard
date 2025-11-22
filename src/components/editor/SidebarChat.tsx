@@ -18,6 +18,7 @@ interface Message {
   verification?: VerificationMetadata;
   remoteProof?: RemoteProof | null;
   remoteId?: string;
+  model?: string;
 }
 
 interface ToolCallState {
@@ -26,6 +27,7 @@ interface ToolCallState {
   args: string;
   status: "in_progress" | "completed";
   verification?: VerificationMetadata;
+  model?: string;
 }
 
 export function SidebarChat({
@@ -48,6 +50,7 @@ export function SidebarChat({
     verification?: VerificationMetadata;
     remoteProof?: RemoteProof | null;
     remoteId?: string;
+    model?: string;
   } | null;
   activeToolCalls: Map<string, ToolCallState>;
   isRunning: boolean;
@@ -116,6 +119,7 @@ export function SidebarChat({
                         verification={msg.verification}
                         verificationId={msg.remoteId}
                         prefetchedProof={msg.remoteProof}
+                        model={msg.model ?? undefined}
                         className="mt-3"
                       />
                     )}
@@ -132,12 +136,13 @@ export function SidebarChat({
                     <div className="text-sm leading-relaxed whitespace-pre-wrap text-foreground">
                       {currentMessage.content}
                     </div>
-                    <VerificationProof
-                      verification={currentMessage.verification}
-                      prefetchedProof={currentMessage.remoteProof}
-                      verificationId={currentMessage.remoteId}
-                      className="mt-3"
-                    />
+                  <VerificationProof
+                    verification={currentMessage.verification}
+                    prefetchedProof={currentMessage.remoteProof}
+                    verificationId={currentMessage.remoteId}
+                    model={currentMessage.model ?? undefined}
+                    className="mt-3"
+                  />
                   </CardContent>
                 </Card>
               )}
@@ -167,6 +172,7 @@ export function SidebarChat({
                     </Badge>
                     <VerificationProof
                       verification={tc.verification}
+                      model={tc.model ?? undefined}
                       className="mt-3"
                     />
                   </CardContent>

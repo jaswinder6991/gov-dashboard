@@ -73,6 +73,7 @@ export default async function handler(
           attentionScore: screening.attentionScore,
           title: screening.title,
           nearAccount: screening.nearAccount,
+          model: (screening.evaluation as any)?.model ?? null,
           timestamp: screening.timestamp.toISOString(),
         })),
         total: results.length,
@@ -117,6 +118,7 @@ export default async function handler(
         attentionScore: screening.attentionScore,
         title: screening.title,
         nearAccount: screening.nearAccount,
+        model: (screening.evaluation as any)?.model ?? null,
         timestamp: screening.timestamp.toISOString(),
       });
     }
@@ -147,6 +149,7 @@ export default async function handler(
       attentionScore: screening.attentionScore,
       title: screening.title,
       nearAccount: screening.nearAccount,
+      model: (screening.evaluation as any)?.model ?? null,
       timestamp: screening.timestamp.toISOString(),
     });
   } catch (error) {

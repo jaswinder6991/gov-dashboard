@@ -137,11 +137,8 @@ export default async function handler(
   }
 
   try {
-    const {
-      evaluation,
-      verification,
-      verificationId,
-    } = await requestEvaluation(sanitizedTitle, sanitizedContent);
+    const { evaluation, verification, verificationId, model } =
+      await requestEvaluation(sanitizedTitle, sanitizedContent);
 
     // Extract computed scores from evaluation
     const qualityScore = evaluation.qualityScore;
@@ -155,8 +152,8 @@ export default async function handler(
         evaluation,
         title: sanitizedTitle,
         nearAccount: signerAccountId, // Always from verified token
-        qualityScore, // NEW: Save computed quality score
-        attentionScore, // NEW: Save computed attention score
+        qualityScore, // Save computed quality score
+        attentionScore, // Save computed attention score
       });
 
       console.log(
@@ -167,10 +164,10 @@ export default async function handler(
       // Error code 23505 = PostgreSQL unique_violation
       const duplicateViolation =
         typeof dbError === "object" && dbError !== null
-          ? ((dbError as { code?: string; constraint?: string }).code ===
+          ? (dbError as { code?: string; constraint?: string }).code ===
               "23505" ||
-              (dbError as { code?: string; constraint?: string }).constraint ===
-                "screening_results_pkey")
+            (dbError as { code?: string; constraint?: string }).constraint ===
+              "screening_results_pkey"
           : false;
 
       if (duplicateViolation) {
@@ -195,6 +192,7 @@ export default async function handler(
       attentionScore,
       version: versionToScreen,
       evaluatedBy: signerAccountId,
+      model,
       message: evaluation.overallPass
         ? `Evaluation passed and saved for revision ${versionToScreen}`
         : `Evaluation failed but saved for revision ${versionToScreen}`,

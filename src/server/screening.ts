@@ -38,7 +38,7 @@ export class ScreeningError extends Error {
 }
 
 export const MAX_TITLE_LENGTH = 500;
-export const MAX_CONTENT_LENGTH = 20000;
+export const MAX_CONTENT_LENGTH = 32000;
 const PROMPT_CONTENT_LIMIT = MAX_CONTENT_LENGTH;
 
 const CONTROL_CHAR_REGEX = /[\x00-\x1F\x7F]/g;
@@ -132,6 +132,7 @@ export interface EvaluationRequestResult {
   evaluation: Evaluation;
   verification?: VerificationMetadata;
   verificationId?: string;
+  model: string;
 }
 
 export async function requestEvaluation(
@@ -145,6 +146,8 @@ export async function requestEvaluation(
 
   const prompt = buildScreeningPrompt(title, content);
 
+  const model = "openai/gpt-oss-120b";
+
   const response = await fetch(
     "https://cloud-api.near.ai/v1/chat/completions",
     {
@@ -154,7 +157,7 @@ export async function requestEvaluation(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "openai/gpt-oss-120b",
+        model,
         messages: [{ role: "user", content: prompt }],
         temperature: 0.3,
       }),
@@ -208,9 +211,10 @@ export async function requestEvaluation(
     );
   }
 
+  evaluation.model = model;
+
   const verificationRaw = extractVerificationMetadata(data);
-  const verificationMessageId =
-    data?.id ?? data?.choices?.[0]?.id ?? undefined;
+  const verificationMessageId = data?.id ?? data?.choices?.[0]?.id ?? undefined;
   const { verification, verificationId } = normalizeVerificationPayload(
     verificationRaw,
     verificationMessageId
@@ -220,6 +224,7 @@ export async function requestEvaluation(
     evaluation,
     verification,
     verificationId: verificationId ?? undefined,
+    model,
   };
 }
 

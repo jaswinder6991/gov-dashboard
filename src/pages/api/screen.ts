@@ -34,7 +34,7 @@ export default async function handler(
     return respondWithScreeningError(
       res,
       error,
-      "Please connect your NEAR wallet to use this feature"
+      "Connect your NEAR wallet to evaluate this proposal."
     );
   }
 
@@ -75,11 +75,8 @@ export default async function handler(
   }
 
   try {
-    const {
-      evaluation,
-      verification,
-      verificationId,
-    } = await requestEvaluation(sanitizedTitle, sanitizedProposal);
+    const { evaluation, verification, verificationId, model } =
+      await requestEvaluation(sanitizedTitle, sanitizedProposal);
 
     console.log(
       `[Screen] Evaluation complete for ${nearAddress} - Pass: ${
@@ -94,6 +91,7 @@ export default async function handler(
       authenticatedAs: nearAddress,
       verification,
       verificationId,
+      model,
     });
   } catch (error) {
     return respondWithScreeningError(res, error, "Failed to evaluate proposal");
