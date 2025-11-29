@@ -277,15 +277,20 @@ export const ChatMessages = ({
         ? Boolean(extractProposalListFromContent(event.content))
         : false;
 
-    const proposalListElement =
-      !messageHasProposalJson &&
+    const isFirstAssistantMessageForTurn =
+      turnInfo?.assistantMessages[0]?.id === event.id;
+
+    const showProposalList =
       turnInfo?.proposalList &&
-      turnInfo.proposalList.topics.length > 0 ? (
-        <div className="mt-3 space-y-3">
-          {turnInfo.proposalList.description && (
-            <p className="text-sm text-muted-foreground">
-              {turnInfo.proposalList.description}
-            </p>
+      turnInfo.proposalList.topics.length > 0 &&
+      (messageHasProposalJson || isFirstAssistantMessageForTurn);
+
+    const proposalListElement = showProposalList ? (
+      <div className="mt-3 space-y-3">
+        {turnInfo.proposalList.description && (
+          <p className="text-sm text-muted-foreground">
+            {turnInfo.proposalList.description}
+          </p>
           )}
           <div className="space-y-3">
             {turnInfo.proposalList.topics.map((topic, index) => (
