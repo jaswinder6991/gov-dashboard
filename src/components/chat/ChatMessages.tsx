@@ -280,41 +280,43 @@ export const ChatMessages = ({
     const isFirstAssistantMessageForTurn =
       turnInfo?.assistantMessages[0]?.id === event.id;
 
+    const proposalList = turnInfo?.proposalList || null;
+
     const showProposalList =
-      turnInfo?.proposalList &&
-      turnInfo.proposalList.topics.length > 0 &&
+      proposalList &&
+      proposalList.topics.length > 0 &&
       (messageHasProposalJson || isFirstAssistantMessageForTurn);
 
     const proposalListElement = showProposalList ? (
       <div className="mt-3 space-y-3">
-        {turnInfo.proposalList.description && (
+        {proposalList.description ? (
           <p className="text-sm text-muted-foreground">
-            {turnInfo.proposalList.description}
+            {proposalList.description}
           </p>
-          )}
-          <div className="space-y-3">
-            {turnInfo.proposalList.topics.map((topic, index) => (
-              <ProposalCard
-                key={`${topic.id}-${index}`}
-                id={topic.id}
-                title={topic.title}
-                excerpt={topic.excerpt}
-                created_at={topic.created_at}
-                username={topic.author}
-                topic_id={topic.id}
-                topic_slug={topic.slug}
-                reply_count={topic.reply_count}
-                views={topic.views}
-                last_posted_at={topic.last_posted_at}
-              />
-            ))}
-          </div>
+        ) : null}
+        <div className="space-y-3">
+          {proposalList.topics.map((topic, index) => (
+            <ProposalCard
+              key={`${topic.id}-${index}`}
+              id={topic.id}
+              title={topic.title}
+              excerpt={topic.excerpt}
+              created_at={topic.created_at}
+              username={topic.author}
+              topic_id={topic.id}
+              topic_slug={topic.slug}
+              reply_count={topic.reply_count}
+              views={topic.views}
+              last_posted_at={topic.last_posted_at}
+            />
+          ))}
         </div>
-      ) : null;
+      </div>
+    ) : null;
     const shouldSuppressMessage =
       event.kind === "message" &&
       messageHasProposalJson &&
-      Boolean(turnInfo?.proposalList);
+      Boolean(proposalList);
 
     const suppressedVerificationElement =
       shouldSuppressMessage &&
