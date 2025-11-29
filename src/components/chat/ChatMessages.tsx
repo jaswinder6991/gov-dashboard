@@ -277,39 +277,46 @@ export const ChatMessages = ({
         ? Boolean(extractProposalListFromContent(event.content))
         : false;
 
-    const proposalListElement =
-      !messageHasProposalJson &&
-      turnInfo?.proposalList &&
-      turnInfo.proposalList.topics.length > 0 ? (
-        <div className="mt-3 space-y-3">
-          {turnInfo.proposalList.description && (
-            <p className="text-sm text-muted-foreground">
-              {turnInfo.proposalList.description}
-            </p>
-          )}
-          <div className="space-y-3">
-            {turnInfo.proposalList.topics.map((topic, index) => (
-              <ProposalCard
-                key={`${topic.id}-${index}`}
-                id={topic.id}
-                title={topic.title}
-                excerpt={topic.excerpt}
-                created_at={topic.created_at}
-                username={topic.author}
-                topic_id={topic.id}
-                topic_slug={topic.slug}
-                reply_count={topic.reply_count}
-                views={topic.views}
-                last_posted_at={topic.last_posted_at}
-              />
-            ))}
-          </div>
+    const isFirstAssistantMessageForTurn =
+      turnInfo?.assistantMessages[0]?.id === event.id;
+
+    const proposalList = turnInfo?.proposalList || null;
+
+    const showProposalList =
+      proposalList &&
+      proposalList.topics.length > 0 &&
+      (messageHasProposalJson || isFirstAssistantMessageForTurn);
+
+    const proposalListElement = showProposalList ? (
+      <div className="mt-3 space-y-3">
+        {proposalList.description ? (
+          <p className="text-sm text-muted-foreground">
+            {proposalList.description}
+          </p>
+        ) : null}
+        <div className="space-y-3">
+          {proposalList.topics.map((topic, index) => (
+            <ProposalCard
+              key={`${topic.id}-${index}`}
+              id={topic.id}
+              title={topic.title}
+              excerpt={topic.excerpt}
+              created_at={topic.created_at}
+              username={topic.author}
+              topic_id={topic.id}
+              topic_slug={topic.slug}
+              reply_count={topic.reply_count}
+              views={topic.views}
+              last_posted_at={topic.last_posted_at}
+            />
+          ))}
         </div>
-      ) : null;
+      </div>
+    ) : null;
     const shouldSuppressMessage =
       event.kind === "message" &&
       messageHasProposalJson &&
-      Boolean(turnInfo?.proposalList);
+      Boolean(proposalList);
 
     const suppressedVerificationElement =
       shouldSuppressMessage &&

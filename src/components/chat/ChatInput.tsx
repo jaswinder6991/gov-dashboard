@@ -4,6 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, Send, Trash2 } from "lucide-react";
 
+export type ChatQuickAction = {
+  label: string;
+  message: string;
+};
+
 interface ChatInputProps {
   onSend: (message: string) => void;
   onClear: () => void;
@@ -13,6 +18,7 @@ interface ChatInputProps {
   disabled?: boolean;
   canClear?: boolean;
   onHeightChange?: (height: number) => void;
+  quickActions?: ChatQuickAction[];
 }
 
 export const ChatInput = ({
@@ -24,6 +30,7 @@ export const ChatInput = ({
   disabled = false,
   canClear = false,
   onHeightChange,
+  quickActions = [],
 }: ChatInputProps) => {
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -51,6 +58,11 @@ export const ChatInput = ({
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const handleQuickAction = (message: string) => {
+    if (!message || isLoading || disabled) return;
+    onSend(message);
   };
 
   useEffect(() => {
@@ -87,6 +99,23 @@ export const ChatInput = ({
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
+        )}
+
+        {quickActions.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {quickActions.map((action) => (
+              <Button
+                key={action.label}
+                variant="secondary"
+                size="sm"
+                disabled={isLoading || disabled}
+                onClick={() => handleQuickAction(action.message)}
+                className="shadow-sm"
+              >
+                {action.label}
+              </Button>
+            ))}
+          </div>
         )}
 
         {/* Input */}

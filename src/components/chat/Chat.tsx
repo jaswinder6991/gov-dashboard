@@ -6,7 +6,7 @@ import MarkdownIt from "markdown-it";
 import { toast } from "sonner";
 import { applyPatch, type Operation } from "fast-json-patch";
 import { ChatMessages } from "./ChatMessages";
-import { ChatInput } from "./ChatInput";
+import { ChatInput, type ChatQuickAction } from "./ChatInput";
 import { Button } from "@/components/ui/button";
 import {
   EventType,
@@ -37,6 +37,7 @@ interface ChatProps {
   state?: Partial<AgentState>;
   threadId?: string;
   runId?: string;
+  quickActions?: ChatQuickAction[];
 }
 
 const generateEventId = () =>
@@ -225,6 +226,7 @@ export const Chat = ({
   state,
   threadId,
   runId,
+  quickActions = [],
 }: ChatProps) => {
   const [eventsState, dispatchEvents] = useReducer(eventsReducer, {
     byId: {},
@@ -366,6 +368,25 @@ export const Chat = ({
     proof: MessageProof
   ) => {
     const messageIdForStatus = proof.messageId ?? verificationId;
+
+    const reportProofFetchFailure = (reason: unknown) => {
+      const message =
+        typeof reason === "string"
+          ? reason
+          : reason instanceof Error
+          ? reason.message
+          : "Failed to fetch verification proof";
+      console.error("Automatic proof fetch failed:", reason);
+      updateMessageEvent(eventId, {
+        verification: {
+          source: "near-ai-cloud",
+          status: "failed",
+          messageId: messageIdForStatus,
+          error: message.slice(0, 200),
+        },
+      });
+    };
+
     updateMessageEvent(eventId, {
       verification: {
         source: "near-ai-cloud",
@@ -397,7 +418,10 @@ export const Chat = ({
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(errorText || "Failed to fetch verification proof");
+        reportProofFetchFailure(
+          errorText || "Failed to fetch verification proof"
+        );
+        return;
       }
 
       const data = (await response.json()) as RemoteProof;
@@ -446,14 +470,7 @@ export const Chat = ({
         remoteProof: data,
       });
     } catch (error) {
-      console.error("Automatic proof fetch failed:", error);
-      updateMessageEvent(eventId, {
-        verification: {
-          source: "near-ai-cloud",
-          status: "failed",
-          messageId: messageIdForStatus,
-        },
-      });
+      reportProofFetchFailure(error);
     }
   };
 
@@ -879,6 +896,7 @@ export const Chat = ({
         placeholder={placeholder}
         canClear={events.length > 0}
         onHeightChange={setInputHeight}
+        quickActions={quickActions}
       />
     </div>
   );

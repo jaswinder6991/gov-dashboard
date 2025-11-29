@@ -637,7 +637,7 @@ export default function ProposalDetail() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => router.push("/")}
+            onClick={() => router.push("/proposals")}
             className="mb-4 gap-2 hover:bg-accent"
           >
             <ArrowLeft className="h-4 w-4" />
